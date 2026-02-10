@@ -25,7 +25,7 @@ Ask the user for the Genie Space ID. It's a 32-character hex string (e.g., `01ef
 Run the fetch script to retrieve the serialized space JSON:
 
 ```bash
-python <skill_path>/scripts/fetch_space.py <space_id>
+python scripts/fetch_space.py <space_id>
 ```
 
 This outputs JSON to stdout with keys: `title`, `description`, `space_id`, `serialized_space` (parsed dict).
@@ -174,7 +174,7 @@ Wait for the user's selection before proceeding.
 Execute each selected benchmark question **sequentially** using the runner script:
 
 ```bash
-python <skill_path>/scripts/run_benchmark.py <space_id> "<question_text>"
+python scripts/run_benchmark.py <space_id> "<question_text>"
 ```
 
 After each question completes, report progress:

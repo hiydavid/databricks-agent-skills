@@ -94,7 +94,7 @@ Provide a brief explanation for each assessment and, for any fail/warning, give 
 ### Example Question SQLs
 
 **At Least 1 Example SQL**
-- Check: `serialized_space.instructions.example_sqls` array length
+- Check: `serialized_space.instructions.example_question_sqls` array length
 - Why: Example SQLs teach Genie complex query patterns it can't infer from schema alone.
 - Fail if: No example SQLs exist
 
@@ -114,13 +114,13 @@ Provide a brief explanation for each assessment and, for any fail/warning, give 
 - Warning if: Queries contain unnecessary verbosity
 
 **Parameters Have Descriptions**
-- Check: `instructions.example_sqls[].parameters[].description` (if parameters exist)
+- Check: `instructions.example_question_sqls[].parameters[].description` (if parameters exist)
 - Why: Parameter descriptions help Genie understand what values to substitute.
 - Fail if: Parameters exist without descriptions
 - NA if: No parameters are used
 
 **Complex Examples Have Usage Guidance**
-- Check: `instructions.example_sqls[].usage_guidance` on complex examples
+- Check: `instructions.example_question_sqls[].usage_guidance` on complex examples
 - Why: Usage guidance tells Genie when to apply a pattern — what keywords or question types should trigger it.
 - Warning if: Complex multi-step examples lack usage guidance
 
