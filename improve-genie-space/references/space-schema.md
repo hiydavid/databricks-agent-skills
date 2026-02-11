@@ -61,9 +61,11 @@ Tables, columns, and metric views available to Genie.
             "column_name": "column_name",
             "description": ["What this column contains"],
             "synonyms": ["alias1", "alias2"],
+            // v1 only (rejected by v2 spaces — use v2 equivalents below)
             "get_example_values": true,
             "build_value_dictionary": true,
             "exclude": false,
+            // v2 only (replaces v1 fields above)
             "enable_entity_matching": false,
             "enable_format_assistance": false
           }
@@ -92,15 +94,17 @@ Tables, columns, and metric views available to Genie.
 | `tables[].column_configs[].column_name` | string | Column name |
 | `tables[].column_configs[].description` | array of strings | Contextual description beyond the column name |
 | `tables[].column_configs[].synonyms` | array of strings | Alternative names users might use |
-| `tables[].column_configs[].get_example_values` | boolean | Whether Genie fetches sample values for this column |
-| `tables[].column_configs[].build_value_dictionary` | boolean | Whether Genie builds a dictionary of discrete values |
+| `tables[].column_configs[].get_example_values` | boolean | (v1 only — use `enable_format_assistance` in v2) Whether Genie fetches sample values for this column |
+| `tables[].column_configs[].build_value_dictionary` | boolean | (v1 only — use `enable_entity_matching` in v2) Whether Genie builds a dictionary of discrete values |
 | `tables[].column_configs[].exclude` | boolean | Whether to hide this column from Genie |
-| `tables[].column_configs[].enable_entity_matching` | boolean | Whether Genie matches user terms to column values |
-| `tables[].column_configs[].enable_format_assistance` | boolean | Whether Genie applies format hints for this column |
+| `tables[].column_configs[].enable_entity_matching` | boolean | (v2 only — replaces `build_value_dictionary`) Whether Genie matches user terms to column values |
+| `tables[].column_configs[].enable_format_assistance` | boolean | (v2 only — replaces `get_example_values`) Whether Genie applies format hints for this column |
 | `metric_views` | array | Pre-computed metric views |
 | `metric_views[].id` | string | 32-char lowercase hex identifier |
 | `metric_views[].identifier` | string | Fully qualified metric view name |
 | `metric_views[].description` | array of strings | What the metric view computes |
+
+> **Version Note:** Spaces with `"version": 2` reject v1 fields (`get_example_values`, `build_value_dictionary`). Use their v2 equivalents (`enable_format_assistance`, `enable_entity_matching`) instead. Including v1 fields in a v2 space config will cause API errors.
 
 ---
 
@@ -143,7 +147,7 @@ Guidance that shapes how Genie interprets questions and generates SQL.
         "parameters": [
           {
             "name": "time_period",
-            "description": "The time granularity (day, week, month, quarter, year)",
+            "description": ["The time granularity (day, week, month, quarter, year)"],
             "type_hint": "STRING",
             "default_value": { "values": ["month"] }
           }
@@ -163,7 +167,7 @@ Guidance that shapes how Genie interprets questions and generates SQL.
 | `example_question_sqls[].usage_guidance` | array of strings | When Genie should apply this pattern |
 | `example_question_sqls[].parameters` | array | Parameterized values in the query |
 | `example_question_sqls[].parameters[].name` | string | Parameter name |
-| `example_question_sqls[].parameters[].description` | string | What the parameter represents |
+| `example_question_sqls[].parameters[].description` | array of strings | What the parameter represents |
 | `example_question_sqls[].parameters[].type_hint` | string | Data type hint (e.g., `"STRING"`, `"INT"`) |
 | `example_question_sqls[].parameters[].default_value` | object | Default value with `values` array |
 
@@ -193,6 +197,8 @@ Guidance that shapes how Genie interprets questions and generates SQL.
 }
 ```
 
+> **Multi-column joins:** Use separate join specs for each condition — compound `AND` expressions are not supported in the `sql` field. Add `comment` and `instruction` fields to both specs indicating they should always be used together.
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `join_specs` | array | Explicit join definitions for multi-table queries |
@@ -202,7 +208,7 @@ Guidance that shapes how Genie interprets questions and generates SQL.
 | `join_specs[].right.identifier` | string | Right table fully qualified name |
 | `join_specs[].right.alias` | string | Alias for the right table in the join |
 | `join_specs[].join_type` | string | Join type (INNER JOIN, LEFT JOIN, etc.) |
-| `join_specs[].sql` | array of strings | Join condition expression segments |
+| `join_specs[].sql` | array of strings | Join condition expression segments. Each element must be a single equality expression (e.g., `"t1.col = t2.col"`). Compound conditions with AND/OR are not supported — use separate join specs for multi-column joins. |
 | `join_specs[].comment` | array of strings | Business context for the relationship |
 | `join_specs[].instruction` | array of strings | Guidance on when/how to use this join |
 

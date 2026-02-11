@@ -48,14 +48,16 @@ Provide a brief explanation for each assessment and, for any fail/warning, give 
 - Good: Column `total_sales` with `"synonyms": ["revenue", "sales amount", "total revenue"]`
 
 **Example Values Enabled**
-- Check: `data_sources.tables[].columns[].get_example_values` (boolean)
+- Check: `data_sources.tables[].columns[].get_example_values` (v1) or `enable_format_assistance` (v2) depending on space version
 - Why: Example values help Genie understand the data distribution and generate correct filter values.
-- Warning if: Filterable columns (strings, categoricals) don't have `get_example_values: true`
+- Warning if: Filterable columns (strings, categoricals) don't have `get_example_values: true` (v1) or `enable_format_assistance: true` (v2)
+- Note: v2 spaces reject `get_example_values` — use `enable_format_assistance` instead
 
 **Value Dictionary Enabled**
-- Check: `data_sources.tables[].columns[].build_value_dictionary` (boolean)
+- Check: `data_sources.tables[].columns[].build_value_dictionary` (v1) or `enable_entity_matching` (v2) depending on space version
 - Why: For columns with a small set of discrete values (e.g., status, region, category), a value dictionary lets Genie match user terms to exact values.
-- Warning if: Low-cardinality categorical columns don't have `build_value_dictionary: true`
+- Warning if: Low-cardinality categorical columns don't have `build_value_dictionary: true` (v1) or `enable_entity_matching: true` (v2)
+- Note: v2 spaces reject `build_value_dictionary` — use `enable_entity_matching` instead
 
 **Irrelevant Columns Hidden**
 - Check: Whether columns unrelated to the space's purpose are included
@@ -131,6 +133,7 @@ Provide a brief explanation for each assessment and, for any fail/warning, give 
 - Why: Without explicit join specs, Genie may guess wrong join conditions, especially for self-joins or non-obvious foreign keys.
 - Warning if: Multiple tables exist but no join specs are defined
 - NA if: Only 1 table is configured
+- Note: Multiple join specs between the same table pair is the correct pattern for multi-column joins (not a problem to flag). Each `sql` element must be a single equality expression — compound AND/OR is not supported. Recommend adding `comment` and `instruction` fields to related join specs to ensure they are used together.
 
 **Join Specs Have Comments**
 - Check: `instructions.join_specs[].comment`

@@ -70,6 +70,7 @@ def fetch_space(space_id: str) -> dict:
         "title": space.title,
         "description": space.description,
         "space_id": space_id,
+        "warehouse_id": space.warehouse_id,
         "serialized_space": json.loads(space.serialized_space),
     }
 
