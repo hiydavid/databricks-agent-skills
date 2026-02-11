@@ -9,12 +9,22 @@ Analyze and optimize Databricks Genie Space configurations by evaluating them ag
 
 ## Prerequisites
 
+**Databricks notebooks / Assistant:**
+- The Databricks SDK is pre-installed and `WorkspaceClient()` authenticates automatically — no setup needed.
+
+**Claude Code (local):**
 1. **Databricks SDK** (v0.85+): If not installed or needs updating, run:
    ```bash
    pip install "databricks-sdk>=0.85"
    ```
 2. **Databricks CLI profile**: Must be configured (`databricks configure`) or have environment variables set (`DATABRICKS_HOST`, `DATABRICKS_TOKEN`).
-3. **CAN EDIT permission** on the target Genie Space (required to read the serialized configuration).
+
+**Both environments:**
+- **CAN EDIT permission** on the target Genie Space (required to read the serialized configuration).
+
+**Output behavior:**
+- Claude Code saves reports to `reports/<space_id>/` in the project root.
+- Databricks notebooks display results inline in cell output.
 
 ## Step 1: Identify the Space ID
 
@@ -22,25 +32,26 @@ Ask the user for the Genie Space ID. It's a 32-character hex string (e.g., `01ef
 
 ## Step 2: Fetch Space Configuration
 
-Run the fetch script to retrieve the serialized space JSON:
+Read `scripts/fetch_space.py` for the implementation, then execute it:
 
-```bash
-python scripts/fetch_space.py <space_id>
-```
+- **Claude Code**: Run via bash:
+  ```bash
+  python scripts/fetch_space.py <space_id>
+  ```
+- **Databricks notebook**: Read the script, then execute the `fetch_space()` function in a notebook cell.
 
-This outputs JSON to stdout with keys: `title`, `description`, `space_id`, `serialized_space` (parsed dict).
+This outputs JSON with keys: `title`, `description`, `space_id`, `serialized_space` (parsed dict).
 
 ### Step 2b: Save Raw Config
 
-1. Create a `reports/<space_id>/` directory in the user's project root if it doesn't already exist.
-2. Save the full JSON output from Step 2 to `reports/<space_id>/space-config.json`.
-3. Inform the user the raw config has been saved.
+- **Claude Code**: Save the JSON output to `reports/<space_id>/space-config.json` (create the directory if needed). Inform the user the raw config has been saved.
+- **Databricks notebook**: The cell output is sufficient. Store the `space_config` variable in memory for use in later steps.
 
-If the script fails:
-- **Missing SDK**: Prompt user to `pip install "databricks-sdk>=0.85"`
-- **Auth failure**: Prompt user to run `databricks configure` or check environment variables
-- **Permission denied**: User needs CAN EDIT on the space
-- **Not found**: Verify the space ID
+If the code fails:
+- **`ImportError`**: Prompt user to `pip install "databricks-sdk>=0.85"` (Claude Code only — SDK is pre-installed in Databricks)
+- **Auth failure**: Prompt user to run `databricks configure` or check environment variables (Claude Code only — Databricks notebooks auto-authenticate)
+- **Permission denied (`403` / `PERMISSION_DENIED`)**: User needs CAN EDIT on the space
+- **Not found (`404` / `NOT_FOUND`)**: Verify the space ID
 
 ## Step 3: Determine Sub-Workflow
 
@@ -132,9 +143,13 @@ List the top 3-5 most impactful fixes, ordered by expected improvement to Genie 
 
 ### Step 3e: Save Report
 
+**Claude Code (local):**
 1. Create a `reports/<space_id>/` directory in the user's project root if it doesn't already exist.
 2. Save the full analysis markdown (everything from Step 3d) to `reports/<space_id>/config-analysis.md` in the project root.
 3. Inform the user of the saved file path.
+
+**Databricks notebook:**
+Display the full analysis markdown inline as cell output.
 
 ---
 
@@ -171,11 +186,13 @@ Wait for the user's selection before proceeding.
 
 ### Step 3c: Run Selected Benchmarks
 
-Execute each selected benchmark question **sequentially** using the runner script:
+Read `scripts/run_benchmark.py` for the implementation, then execute each selected benchmark question **sequentially**:
 
-```bash
-python scripts/run_benchmark.py <space_id> "<question_text>"
-```
+- **Claude Code**: Run via bash:
+  ```bash
+  python scripts/run_benchmark.py <space_id> "<question_text>"
+  ```
+- **Databricks notebook**: Read the script, then execute the `run_benchmark()` function in a notebook cell for each question.
 
 After each question completes, report progress:
 ```
@@ -185,8 +202,8 @@ After each question completes, report progress:
 ```
 
 **Error handling:**
-- **Exit code 1** (script-level error: auth failure, space not found) → halt all remaining benchmarks and report the error to the user
-- **Exit code 0 with `status: "FAILED"`, `"TIMEOUT"`, or `"ERROR"`** → record the result and continue to the next question
+- **Exit code 1 / `RuntimeError`** (script-level error: auth failure, space not found) → halt all remaining benchmarks and report the error to the user
+- **`status: "FAILED"`, `"TIMEOUT"`, or `"ERROR"`** in the result → record the result and continue to the next question
 
 ### Step 3d: Analyze Each Result
 
@@ -268,6 +285,10 @@ Score counts correct as 1, partial as 0.5, incorrect and error as 0.
 
 ### Step 3f: Save Report
 
+**Claude Code (local):**
 1. Create a `reports/<space_id>/` directory in the user's project root if it doesn't already exist.
 2. Save the full report markdown to `reports/<space_id>/benchmark-analysis.md` in the project root.
 3. Inform the user of the saved file path.
+
+**Databricks notebook:**
+Display the full report markdown inline as cell output.
