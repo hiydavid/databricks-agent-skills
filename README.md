@@ -4,13 +4,13 @@ Skills that extend [Databricks Assistant](https://docs.databricks.com/aws/en/ass
 
 ## Skills
 
-* **[improve-genie-space](./databricks-skills/improve-genie-space/)** — Analyze and optimize Genie Space (AI/BI Dashboard) configurations against best practices
+* **[improve-genie-space](./improve-genie-space/)** — Analyze and optimize Genie Space (AI/BI Dashboard) configurations against best practices
 
 ## Setup
 
 ### Databricks Assistant
 
-Copy the desired skill folder from `databricks-skills/` into your workspace skills directory:
+Copy the desired skill folder into your workspace skills directory:
 
 ```
 /Users/{username}/.assistant/skills/
@@ -27,5 +27,5 @@ The Assistant automatically discovers skills in agent mode. See the [Databricks 
 Add the skill path to your `CLAUDE.md` or use `--skill` when invoking Claude Code:
 
 ```bash
-claude --skill ./databricks-skills/{skill-name}
+claude --skill ./{skill-name}
 ```
