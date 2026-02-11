@@ -24,7 +24,16 @@ Analyze and optimize Databricks Genie Space configurations by evaluating them ag
 
 **Output behavior:**
 - Claude Code saves reports to `reports/<space_id>/` in the project root.
-- Databricks notebooks display results inline in cell output.
+- Databricks notebooks: create and run notebook cells for all code execution and result display. Do not run code only in the chat panel.
+
+**Databricks notebook execution model:**
+When running in a Databricks notebook, always use notebook cells for code execution — do not run code or display results only in the chat panel:
+1. **Create** a new code cell in the notebook.
+2. **Write** the Python code into that cell.
+3. **Run** the cell and wait for it to complete.
+4. **Read** the cell output to get the result.
+
+Chat responses should only be used for asking questions, reporting progress, and presenting analysis. All Python execution must happen in notebook cells.
 
 ## Step 1: Identify the Space ID
 
@@ -38,14 +47,19 @@ Read `scripts/fetch_space.py` for the implementation, then execute it:
   ```bash
   python scripts/fetch_space.py <space_id>
   ```
-- **Databricks notebook**: Read the script, then execute the `fetch_space()` function in a notebook cell.
+- **Databricks notebook**: Read the script to understand the implementation. Then create a new notebook code cell containing the function definition and a call to it. Replace any `sys.exit()` calls with `raise` statements so the notebook kernel is not killed. Run the cell. Example cell structure:
+  ```python
+  # <paste fetch_space function definition here, replacing sys.exit(1) with raise>
+  space_config = fetch_space("<space_id>")
+  space_config
+  ```
 
 This outputs JSON with keys: `title`, `description`, `space_id`, `serialized_space` (parsed dict).
 
 ### Step 2b: Save Raw Config
 
 - **Claude Code**: Save the JSON output to `reports/<space_id>/space-config.json` (create the directory if needed). Inform the user the raw config has been saved.
-- **Databricks notebook**: The cell output is sufficient. Store the `space_config` variable in memory for use in later steps.
+- **Databricks notebook**: No additional cell needed. The `space_config` variable from the previous cell is stored in the notebook kernel's memory and is available in subsequent cells.
 
 If the code fails:
 - **`ImportError`**: Prompt user to `pip install "databricks-sdk>=0.85"` (Claude Code only — SDK is pre-installed in Databricks)
@@ -149,7 +163,7 @@ List the top 3-5 most impactful fixes, ordered by expected improvement to Genie 
 3. Inform the user of the saved file path.
 
 **Databricks notebook:**
-Display the full analysis markdown inline as cell output.
+Create a new notebook code cell that renders the analysis as cell output using `displayHTML()` or by printing the markdown string. Do not display the report only in the chat panel.
 
 ---
 
@@ -192,7 +206,7 @@ Read `scripts/run_benchmark.py` for the implementation, then execute each select
   ```bash
   python scripts/run_benchmark.py <space_id> "<question_text>"
   ```
-- **Databricks notebook**: Read the script, then execute the `run_benchmark()` function in a notebook cell for each question.
+- **Databricks notebook**: Read the script to understand the implementation. For each selected question, create a new notebook code cell containing the function definition and a call to it. Replace any `sys.exit()` calls with `raise` statements. Run the cell and read its output before proceeding to the next question. Report progress in the chat after each cell completes.
 
 After each question completes, report progress:
 ```
@@ -291,4 +305,4 @@ Score counts correct as 1, partial as 0.5, incorrect and error as 0.
 3. Inform the user of the saved file path.
 
 **Databricks notebook:**
-Display the full report markdown inline as cell output.
+Create a new notebook code cell that renders the benchmark report as cell output using `displayHTML()` or by printing the markdown string. Do not display the report only in the chat panel.
