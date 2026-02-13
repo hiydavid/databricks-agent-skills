@@ -5,8 +5,8 @@ Skills that extend [Databricks Assistant](https://docs.databricks.com/aws/en/ass
 ## Skills
 
 * **[improve-genie-space](./improve-genie-space/)** — Analyze and optimize Genie Space (AI/BI Dashboard) configurations against best practices
-* **[parse-documents]()** — WIP
-* **[create-update-vector-search-index]()** — WIP
+* **[parse-documents](./parse-documents/)** — WIP
+* **[create-update-vector-search-index](./create-update-vector-search-index/)** — WIP
 * **[draw-architecture-diagram]()** — WIP
 
 ## Setup
