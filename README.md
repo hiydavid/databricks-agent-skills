@@ -5,6 +5,9 @@ Skills that extend [Databricks Assistant](https://docs.databricks.com/aws/en/ass
 ## Skills
 
 * **[improve-genie-space](./improve-genie-space/)** — Analyze and optimize Genie Space (AI/BI Dashboard) configurations against best practices
+* **[parse-documents](./parse-documents/)** — WIP
+* **[create-update-vector-search-index](./create-update-vector-search-index/)** — WIP
+* **[draw-architecture-diagram]()** — WIP
 
 ## Setup
 
@@ -12,7 +15,7 @@ Skills that extend [Databricks Assistant](https://docs.databricks.com/aws/en/ass
 
 Copy the desired skill folder into your workspace skills directory:
 
-```
+```text
 /Users/{username}/.assistant/skills/
 └── {skill-name}/
     ├── SKILL.md
