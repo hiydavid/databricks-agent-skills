@@ -1,1 +1,8 @@
 .DS_Store
+__pycache__/
+node_modules/
+package-lock.json
+*.excalidraw
+*.swp
+/reports
+/test-skills/agent-architecture-*
