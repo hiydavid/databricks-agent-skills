@@ -1,6 +1,6 @@
 # Notebook Cell Templates
 
-SQL templates for each cell in the parse-documents notebook. Replace `${PARAM}` placeholders with user-provided values.
+SQL + Python templates for each cell in the parse-documents notebook. Replace `${PARAM}` placeholders with user-provided values.
 
 ## Table of Contents
 
@@ -25,6 +25,8 @@ CREATE WIDGET TEXT target_table DEFAULT '${TARGET_TABLE}';
 CREATE WIDGET TEXT vs_endpoint DEFAULT '${VS_ENDPOINT}';
 CREATE WIDGET TEXT vs_index DEFAULT '${VS_INDEX}';
 CREATE WIDGET TEXT chunk_strategy DEFAULT '${CHUNK_STRATEGY}'; -- page, token, semantic
+CREATE WIDGET TEXT chunk_size DEFAULT '512';
+CREATE WIDGET TEXT chunk_overlap DEFAULT '50';
 CREATE WIDGET TEXT embedding_model DEFAULT 'databricks-gte-large-en';
 ```
 
@@ -32,44 +34,73 @@ CREATE WIDGET TEXT embedding_model DEFAULT 'databricks-gte-large-en';
 
 ## Cell 2: Parse Documents
 
-Use PySpark to load binary files and apply `ai_parse_document`.
+Use PySpark to load binary files and apply `ai_parse_document` (schema version 2.0).
 
 ```python
-# Parse documents from UC Volume using ai_parse_document
+# Parse documents from a UC Volume using ai_parse_document
 from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
-# Load binary files from the volume
+source_volume = dbutils.widgets.get("source_volume")
+target_catalog = dbutils.widgets.get("target_catalog")
+target_schema = dbutils.widgets.get("target_schema")
+target_table = dbutils.widgets.get("target_table")
+
 raw_docs = (
     spark.read.format("binaryFile")
-    .option("pathGlobFilter", "*.{pdf,docx,pptx,doc,ppt,jpg,jpeg,png}")
-    .load(getArgument("source_volume"))
+    .load(source_volume)
+    .where(F.lower(F.col("path")).rlike(r".*\.(pdf|doc|docx|ppt|pptx|jpg|jpeg|png)$"))
 )
 
-# Apply ai_parse_document and extract elements
-parsed = raw_docs.selectExpr(
+# Official pattern: pin parser schema version and inspect parse status.
+parsed_raw = raw_docs.selectExpr(
     "path AS source_path",
     "ai_parse_document(content, map('version', '2.0')) AS parsed"
 )
 
-# Flatten to elements with page info
-elements = parsed.selectExpr(
-    "source_path",
-    "regexp_extract(source_path, '[^/]+$', 0) AS source_file",
-    "inline(parsed:document:elements)"
-).select(
-    "source_path",
-    "source_file",
-    F.col("type").alias("element_type"),
-    F.col("content").alias("element_content"),
-    F.col("page").alias("page_id")
+parsed_success = parsed_raw.where("try_cast(parsed:error_status AS STRING) IS NULL")
+parsed_errors = parsed_raw.where("try_cast(parsed:error_status AS STRING) IS NOT NULL")
+
+# Official pattern: extract elements as ARRAY<VARIANT>.
+elements = (
+    parsed_success
+    .selectExpr(
+        "source_path",
+        "regexp_extract(source_path, '[^/]+$', 0) AS source_file",
+        "posexplode(try_cast(parsed:document:elements AS ARRAY<VARIANT>)) AS (element_position, element)"
+    )
+    .selectExpr(
+        "source_path",
+        "source_file",
+        "element_position",
+        "try_cast(element:id AS BIGINT) AS element_id",
+        "try_cast(element:type AS STRING) AS element_type",
+        "try_cast(element:content AS STRING) AS element_content",
+        "try_cast(try_element_at(element:bbox, 1):page_id AS INT) AS page_id"
+    )
+    .where("element_content IS NOT NULL AND trim(element_content) <> ''")
 )
 
-# Save raw parsed elements
-raw_table = f"{getArgument('target_catalog')}.{getArgument('target_schema')}.{getArgument('target_table')}_raw"
-elements.write.mode("overwrite").saveAsTable(raw_table)
+# Add a deterministic ordering key for chunk assembly.
+ordinal_window = Window.partitionBy("source_path").orderBy(
+    F.col("page_id").asc_nulls_last(),
+    F.col("element_id").asc_nulls_last(),
+    F.col("element_position").asc_nulls_last(),
+    F.col("element_type").asc_nulls_last(),
+    F.col("element_content").asc_nulls_last()
+)
 
-print(f"Parsed {raw_docs.count()} documents into {elements.count()} elements")
-print(f"Saved to {raw_table}")
+elements = elements.withColumn("element_ordinal", F.row_number().over(ordinal_window))
+
+raw_table = f"{target_catalog}.{target_schema}.{target_table}_raw"
+elements.write.mode("overwrite").format("delta").saveAsTable(raw_table)
+
+error_count = parsed_errors.count()
+if error_count > 0:
+    print(f"Skipped {error_count} files due to ai_parse_document errors (check parsed:error_status)")
+
+print(f"Parsed {raw_docs.count()} files into {elements.count()} elements")
+print(f"Saved parsed elements to {raw_table}")
 ```
 
 ---
@@ -80,25 +111,41 @@ Choose ONE of the three strategies below based on the `chunk_strategy` parameter
 
 ### Page-Based Chunking
 
-Concatenate all elements per page into a single chunk.
+Concatenate ordered elements per page into a single chunk.
 
 ```python
-# Page-based chunking: one chunk per page
+# Page-based chunking: one chunk per page with deterministic ordering
 from pyspark.sql import functions as F
-from pyspark.sql.window import Window
 
-raw_table = f"{getArgument('target_catalog')}.{getArgument('target_schema')}.{getArgument('target_table')}_raw"
+target_catalog = dbutils.widgets.get("target_catalog")
+target_schema = dbutils.widgets.get("target_schema")
+target_table = dbutils.widgets.get("target_table")
+
+raw_table = f"{target_catalog}.{target_schema}.{target_table}_raw"
 elements = spark.table(raw_table)
 
 chunks = (
     elements
     .groupBy("source_path", "source_file", "page_id")
     .agg(
-        F.concat_ws("\n\n", F.collect_list("element_content")).alias("chunk_text"),
-        F.count("*").alias("element_count")
+        F.sort_array(
+            F.collect_list(F.struct("element_ordinal", "element_content"))
+        ).alias("ordered_elements")
     )
-    .withColumn("chunk_id", F.monotonically_increasing_id())
-    .select("chunk_id", "chunk_text", "source_file", "page_id", "source_path")
+    .withColumn(
+        "chunk_text",
+        F.expr("concat_ws('\\n\\n', transform(ordered_elements, x -> x.element_content))")
+    )
+    .where("chunk_text IS NOT NULL AND trim(chunk_text) <> ''")
+    .select(
+        F.monotonically_increasing_id().alias("chunk_id"),
+        "chunk_text",
+        "source_file",
+        "page_id",
+        "source_path",
+        F.lit(None).cast("int").alias("chunk_index"),
+        F.lit(None).cast("string").alias("section_heading")
+    )
 )
 
 chunks.createOrReplaceTempView("chunked_documents")
@@ -110,44 +157,92 @@ print(f"Created {chunks.count()} page-based chunks")
 Split text into fixed-size token chunks with overlap.
 
 ```python
-# Token-based chunking with overlap
+# Token-based chunking with deterministic document order and tokenizer fallback
 from pyspark.sql import functions as F
-from pyspark.sql.types import ArrayType, StructType, StructField, StringType, IntegerType
-import tiktoken
+from pyspark.sql.types import ArrayType, StructField, StructType, StringType, IntegerType
 
-CHUNK_SIZE = 512    # tokens per chunk
-OVERLAP = 50        # overlap tokens between chunks
+chunk_size = int(dbutils.widgets.get("chunk_size") or "512")
+overlap = int(dbutils.widgets.get("chunk_overlap") or "50")
+
+if chunk_size <= 0:
+    raise ValueError("chunk_size must be > 0")
+if overlap < 0:
+    raise ValueError("chunk_overlap must be >= 0")
+if overlap >= chunk_size:
+    raise ValueError("chunk_overlap must be smaller than chunk_size")
 
 @F.udf(returnType=ArrayType(StructType([
     StructField("chunk_text", StringType()),
     StructField("chunk_index", IntegerType())
 ])))
-def token_chunk(text, chunk_size=CHUNK_SIZE, overlap=OVERLAP):
+def token_chunk(text):
+    if text is None:
+        return []
+
+    text = text.strip()
     if not text:
         return []
-    enc = tiktoken.get_encoding("cl100k_base")
-    tokens = enc.encode(text)
-    chunks = []
-    start = 0
-    idx = 0
-    while start < len(tokens):
-        end = min(start + chunk_size, len(tokens))
-        chunk_text = enc.decode(tokens[start:end])
-        chunks.append({"chunk_text": chunk_text, "chunk_index": idx})
-        start += chunk_size - overlap
-        idx += 1
-    return chunks
 
-raw_table = f"{getArgument('target_catalog')}.{getArgument('target_schema')}.{getArgument('target_table')}_raw"
+    try:
+        import tiktoken
+
+        encoder = tiktoken.get_encoding("cl100k_base")
+        tokens = encoder.encode(text)
+        step = chunk_size - overlap
+
+        chunks = []
+        start = 0
+        idx = 0
+        while start < len(tokens):
+            end = min(start + chunk_size, len(tokens))
+            chunk_text = encoder.decode(tokens[start:end]).strip()
+            if chunk_text:
+                chunks.append({"chunk_text": chunk_text, "chunk_index": idx})
+            start += step
+            idx += 1
+        return chunks
+    except Exception:
+        # Fallback path for clusters where tiktoken is unavailable.
+        words = text.split()
+        word_chunk_size = max(1, int(round(chunk_size * 1.3)))
+        word_overlap = max(0, int(round(overlap * 1.3)))
+        word_step = max(1, word_chunk_size - word_overlap)
+
+        chunks = []
+        start = 0
+        idx = 0
+        while start < len(words):
+            end = min(start + word_chunk_size, len(words))
+            chunk_text = " ".join(words[start:end]).strip()
+            if chunk_text:
+                chunks.append({"chunk_text": chunk_text, "chunk_index": idx})
+            start += word_step
+            idx += 1
+        return chunks
+
+
+target_catalog = dbutils.widgets.get("target_catalog")
+target_schema = dbutils.widgets.get("target_schema")
+target_table = dbutils.widgets.get("target_table")
+
+raw_table = f"{target_catalog}.{target_schema}.{target_table}_raw"
 elements = spark.table(raw_table)
 
-# Concatenate all elements per document, then chunk
 doc_text = (
     elements
     .groupBy("source_path", "source_file")
     .agg(
-        F.concat_ws("\n\n", F.collect_list("element_content")).alias("full_text"),
-        F.min("page_id").alias("start_page")
+        F.sort_array(
+            F.collect_list(F.struct("element_ordinal", "element_content", "page_id"))
+        ).alias("ordered_elements")
+    )
+    .withColumn(
+        "full_text",
+        F.expr("concat_ws('\\n\\n', transform(ordered_elements, x -> x.element_content))")
+    )
+    .withColumn(
+        "page_id",
+        F.expr("try_element_at(transform(ordered_elements, x -> x.page_id), 1)")
     )
 )
 
@@ -158,20 +253,19 @@ chunks = (
         F.monotonically_increasing_id().alias("chunk_id"),
         F.col("chunks.chunk_text").alias("chunk_text"),
         "source_file",
+        "page_id",
         "source_path",
-        F.col("chunks.chunk_index").alias("chunk_index")
+        F.col("chunks.chunk_index").alias("chunk_index"),
+        F.lit(None).cast("string").alias("section_heading")
     )
+    .where("chunk_text IS NOT NULL AND trim(chunk_text) <> ''")
 )
 
 chunks.createOrReplaceTempView("chunked_documents")
-print(f"Created {chunks.count()} token-based chunks (size={CHUNK_SIZE}, overlap={OVERLAP})")
-```
-
-**Note:** `tiktoken` must be installed on the cluster. If unavailable, fall back to whitespace-based splitting:
-```python
-# Fallback: approximate token count using whitespace split
-words = text.split()
-# ~1.3 words per token is a rough approximation
+print(
+    f"Created {chunks.count()} token-based chunks "
+    f"(size={chunk_size}, overlap={overlap})"
+)
 ```
 
 ### Semantic Chunking
@@ -179,54 +273,104 @@ words = text.split()
 Chunk by heading/section boundaries using parsed layout metadata.
 
 ```python
-# Semantic chunking: split by headings/sections
+# Semantic chunking with deterministic ordering and page-based fallback
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
-raw_table = f"{getArgument('target_catalog')}.{getArgument('target_schema')}.{getArgument('target_table')}_raw"
+target_catalog = dbutils.widgets.get("target_catalog")
+target_schema = dbutils.widgets.get("target_schema")
+target_table = dbutils.widgets.get("target_table")
+
+raw_table = f"{target_catalog}.{target_schema}.{target_table}_raw"
 elements = spark.table(raw_table)
 
-# Assign section IDs: increment whenever a heading element appears
-heading_window = Window.partitionBy("source_path").orderBy("page_id")
+heading_window = Window.partitionBy("source_path").orderBy("element_ordinal")
 
 sectioned = (
     elements
     .withColumn(
         "is_heading",
-        F.when(F.col("element_type").isin("title", "section_header", "heading"), 1).otherwise(0)
+        F.when(
+            F.lower(F.col("element_type")).isin("title", "section_header", "heading"),
+            F.lit(1)
+        ).otherwise(F.lit(0))
     )
     .withColumn("section_id", F.sum("is_heading").over(heading_window))
 )
 
-# Group elements by section
-chunks = (
-    sectioned
-    .groupBy("source_path", "source_file", "section_id")
-    .agg(
-        F.concat_ws("\n\n", F.collect_list("element_content")).alias("chunk_text"),
-        F.first("page_id").alias("page_id"),
-        F.first(
-            F.when(F.col("is_heading") == 1, F.col("element_content"))
-        ).alias("section_heading")
-    )
-    .withColumn("chunk_id", F.monotonically_increasing_id())
-    .select("chunk_id", "chunk_text", "source_file", "page_id", "section_heading", "source_path")
-)
+heading_count = sectioned.where(F.col("is_heading") == 1).limit(1).count()
 
-# If no headings were found, fall back to page-based
-heading_count = sectioned.filter(F.col("is_heading") == 1).count()
 if heading_count == 0:
-    print("No headings detected — falling back to page-based chunking")
+    print("No headings detected; falling back to page-based chunking")
     chunks = (
         elements
         .groupBy("source_path", "source_file", "page_id")
-        .agg(F.concat_ws("\n\n", F.collect_list("element_content")).alias("chunk_text"))
-        .withColumn("chunk_id", F.monotonically_increasing_id())
-        .select("chunk_id", "chunk_text", "source_file", "page_id", "source_path")
+        .agg(
+            F.sort_array(
+                F.collect_list(F.struct("element_ordinal", "element_content"))
+            ).alias("ordered_elements")
+        )
+        .withColumn(
+            "chunk_text",
+            F.expr("concat_ws('\\n\\n', transform(ordered_elements, x -> x.element_content))")
+        )
+        .where("chunk_text IS NOT NULL AND trim(chunk_text) <> ''")
+        .select(
+            F.monotonically_increasing_id().alias("chunk_id"),
+            "chunk_text",
+            "source_file",
+            "page_id",
+            "source_path",
+            F.lit(None).cast("int").alias("chunk_index"),
+            F.lit(None).cast("string").alias("section_heading")
+        )
+    )
+else:
+    chunks = (
+        sectioned
+        .groupBy("source_path", "source_file", "section_id")
+        .agg(
+            F.sort_array(
+                F.collect_list(
+                    F.struct(
+                        "element_ordinal",
+                        "is_heading",
+                        "element_content",
+                        "page_id"
+                    )
+                )
+            ).alias("ordered_elements")
+        )
+        .withColumn(
+            "chunk_text",
+            F.expr("concat_ws('\\n\\n', transform(ordered_elements, x -> x.element_content))")
+        )
+        .withColumn(
+            "section_heading",
+            F.expr(
+                "try_element_at("
+                "transform(filter(ordered_elements, x -> x.is_heading = 1), x -> x.element_content), 1"
+                ")"
+            )
+        )
+        .withColumn(
+            "page_id",
+            F.expr("try_element_at(transform(ordered_elements, x -> x.page_id), 1)")
+        )
+        .where("chunk_text IS NOT NULL AND trim(chunk_text) <> ''")
+        .select(
+            F.monotonically_increasing_id().alias("chunk_id"),
+            "chunk_text",
+            "source_file",
+            "page_id",
+            "source_path",
+            F.lit(None).cast("int").alias("chunk_index"),
+            "section_heading"
+        )
     )
 
 chunks.createOrReplaceTempView("chunked_documents")
-print(f"Created {chunks.count()} semantic chunks from {heading_count} sections")
+print(f"Created {chunks.count()} semantic chunks")
 ```
 
 ---
@@ -241,18 +385,21 @@ CREATE OR REPLACE TABLE ${target_catalog}.${target_schema}.${target_table} (
   chunk_id BIGINT GENERATED ALWAYS AS IDENTITY,
   chunk_text STRING NOT NULL,
   source_file STRING,
-  page_id STRING,
-  source_path STRING
+  page_id INT,
+  source_path STRING,
+  chunk_index INT,
+  section_heading STRING
 )
 TBLPROPERTIES (delta.enableChangeDataFeed = true);
 
--- Insert chunked data
+-- Insert chunked data from the selected strategy
 INSERT INTO ${target_catalog}.${target_schema}.${target_table}
-  (chunk_text, source_file, page_id, source_path)
-SELECT chunk_text, source_file, page_id, source_path
+  (chunk_text, source_file, page_id, source_path, chunk_index, section_heading)
+SELECT chunk_text, source_file, page_id, source_path, chunk_index, section_heading
 FROM chunked_documents;
 
-SELECT count(*) AS total_chunks FROM ${target_catalog}.${target_schema}.${target_table};
+SELECT count(*) AS total_chunks
+FROM ${target_catalog}.${target_schema}.${target_table};
 ```
 
 ---
@@ -263,69 +410,96 @@ SELECT count(*) AS total_chunks FROM ${target_catalog}.${target_schema}.${target
 
 ```python
 from databricks.vector_search.client import VectorSearchClient
+import time
 
+vs_endpoint = dbutils.widgets.get("vs_endpoint")
+index_name = dbutils.widgets.get("vs_index")
+embedding_model = dbutils.widgets.get("embedding_model")
+target_catalog = dbutils.widgets.get("target_catalog")
+target_schema = dbutils.widgets.get("target_schema")
+target_table = dbutils.widgets.get("target_table")
+
+source_table = f"{target_catalog}.{target_schema}.{target_table}"
 vsc = VectorSearchClient()
 
-# Create endpoint (skip if reusing existing)
+# Create endpoint (or reuse if it already exists)
 try:
-    vsc.create_endpoint(
-        name=getArgument("vs_endpoint"),
-        endpoint_type="STANDARD"
-    )
-    print(f"Created endpoint: {getArgument('vs_endpoint')}")
+    vsc.create_endpoint(name=vs_endpoint, endpoint_type="STANDARD")
+    print(f"Created endpoint: {vs_endpoint}")
 except Exception as e:
     if "already exists" in str(e).lower():
-        print(f"Endpoint '{getArgument('vs_endpoint')}' already exists, reusing")
+        print(f"Endpoint '{vs_endpoint}' already exists, reusing")
     else:
         raise
 
-# Create delta-sync index with managed embeddings
-source_table = f"{getArgument('target_catalog')}.{getArgument('target_schema')}.{getArgument('target_table')}"
-index_name = getArgument("vs_index")
+# Create index (or reuse) and trigger a sync
+try:
+    vsc.create_delta_sync_index(
+        endpoint_name=vs_endpoint,
+        source_table_name=source_table,
+        index_name=index_name,
+        pipeline_type="TRIGGERED",
+        primary_key="chunk_id",
+        embedding_source_column="chunk_text",
+        embedding_model_endpoint_name=embedding_model,
+        columns_to_sync=[
+            "chunk_id",
+            "chunk_text",
+            "source_file",
+            "page_id",
+            "source_path",
+            "chunk_index",
+            "section_heading"
+        ]
+    )
+    print(f"Created index: {index_name}")
+except Exception as e:
+    if "already exists" in str(e).lower():
+        print(f"Index '{index_name}' already exists, reusing")
+    else:
+        raise
 
-index = vsc.create_delta_sync_index(
-    endpoint_name=getArgument("vs_endpoint"),
-    source_table_name=source_table,
-    index_name=index_name,
-    pipeline_type="TRIGGERED",
-    primary_key="chunk_id",
-    embedding_source_column="chunk_text",
-    embedding_model_endpoint_name=getArgument("embedding_model"),
-)
-
-print(f"Created index: {index_name}")
-print("Syncing... this may take several minutes depending on data size.")
-
-# Wait for index to be ready
-import time
 idx = vsc.get_index(index_name=index_name)
-while not idx.describe().get("status", {}).get("ready", False):
-    print("Index syncing...")
+idx.sync()
+
+while True:
+    status = idx.describe().get("status", {})
+    if status.get("ready", False):
+        print("Index is ready")
+        break
+
+    detailed_state = str(status.get("detailed_state", "")).upper()
+    if detailed_state in {"FAILED", "ERROR"}:
+        raise RuntimeError(f"Index sync failed: {status}")
+
+    print(f"Index status: {status.get('message', 'syncing')}")
     time.sleep(30)
     idx = vsc.get_index(index_name=index_name)
-
-print("Index is ready!")
 ```
 
 ### Option B: Pre-Computed Embeddings
 
-Use this if embeddings are already computed in a column.
+Use this when embeddings already exist in a source column.
 
 ```python
 from databricks.vector_search.client import VectorSearchClient
 
+vs_endpoint = dbutils.widgets.get("vs_endpoint")
+index_name = dbutils.widgets.get("vs_index")
+target_catalog = dbutils.widgets.get("target_catalog")
+target_schema = dbutils.widgets.get("target_schema")
+target_table = dbutils.widgets.get("target_table")
+
+source_table = f"{target_catalog}.{target_schema}.{target_table}"
 vsc = VectorSearchClient()
 
-source_table = f"{getArgument('target_catalog')}.{getArgument('target_schema')}.{getArgument('target_table')}"
-index_name = getArgument("vs_index")
-
-index = vsc.create_delta_sync_index(
-    endpoint_name=getArgument("vs_endpoint"),
+vsc.create_delta_sync_index(
+    endpoint_name=vs_endpoint,
     source_table_name=source_table,
     index_name=index_name,
     pipeline_type="TRIGGERED",
     primary_key="chunk_id",
-    embedding_dimension=1024,        # adjust to match your model
-    embedding_vector_column="embedding"  # column containing vectors
+    embedding_dimension=1024,             # adjust for your embedding model
+    embedding_vector_column="embedding"  # pre-computed vector column
 )
 ```

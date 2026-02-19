@@ -97,5 +97,5 @@ print(results)
 ## Next Steps
 
 After index is created:
-1. **Wire into agent** — See **add-tools** skill for `databricks.yml` permissions
+1. **Wire into agent (external dependency)** — Use your external `add-tools` workflow (not in this repo) to configure `databricks.yml` permissions
 2. **Parse documents first?** — See **parse-documents** skill for the full doc → index pipeline

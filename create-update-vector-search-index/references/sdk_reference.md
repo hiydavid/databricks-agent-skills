@@ -30,7 +30,7 @@ vsc = VectorSearchClient(
 )
 ```
 
-Service principal auth improves query performance by ~100ms vs PAT.
+Service principal auth is generally preferred for production automation and credential management.
 
 ---
 
