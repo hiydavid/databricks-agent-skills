@@ -10,7 +10,6 @@ Skills that extend [Databricks Assistant](https://docs.databricks.com/aws/en/ass
 | **[multi-agent-architecture](./multi-agent-architecture/)** | `/multi-agent-architecture` | Design multi-agent architectures for PoC/hackathon/MVP projects with Excalidraw diagrams |
 | **[parse-documents](./parse-documents/)** | — | Parse and chunk documents for ingestion |
 | **[create-update-vector-search-index](./create-update-vector-search-index/)** | — | Create or update Databricks Vector Search indexes |
-| **[build-and-deploy-agent](./build-and-deploy-agent/)** | — | *(WIP)* Build and deploy Databricks agents |
 
 ## Setup
 
@@ -70,7 +69,6 @@ databricks-agent-skills/
 ├── multi-agent-architecture/
 ├── parse-documents/
 ├── create-update-vector-search-index/
-├── build-and-deploy-agent/
 ├── scripts/                     # Dev tooling
 │   ├── manage-skills.sh
 │   └── mermaid-to-excalidraw.mjs

@@ -162,9 +162,11 @@ cmd_remove() {
   for skill in "${skills[@]}"; do
     local dest="$cmd_dir/${skill}.md"
 
-    if [ -L "$dest" ] || [ -f "$dest" ]; then
+    if [ -L "$dest" ]; then
       rm -f "$dest"
       echo "  [removed] $skill"
+    elif [ -f "$dest" ]; then
+      echo "  [skip] $skill — is a regular file, not a symlink (remove manually if intended)"
     else
       echo "  [skip] $skill — not installed"
     fi
