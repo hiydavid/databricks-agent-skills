@@ -1,11 +1,11 @@
 ---
 name: parse-documents
-description: "Parse documents and create a Databricks Vector Search index for RAG. Use when: (1) User wants to parse PDFs, DOCX, PPTX, or images into structured text, (2) User says 'parse documents', 'create vector search index', 'build RAG pipeline', 'chunk documents', (3) User needs to go from raw documents in a UC Volume to a searchable Vector Search index, (4) User asks about ai_parse_document or document chunking strategies. Generates a Databricks SQL notebook that runs the full pipeline: ai_parse_document → chunk → Delta table → Vector Search endpoint/index."
+description: "Build a document-ingestion pipeline for RAG from Unity Catalog Volume files using `ai_parse_document`, chunking, Delta tables, and optional initial Vector Search index creation. Use when: (1) User wants to parse PDFs, DOCX, PPTX, or images into structured text, (2) User asks for ai_parse_document notebook templates or chunking strategy selection, (3) User needs end-to-end document-to-index ingestion from raw files. Do not use for standalone Vector Search endpoint/index lifecycle operations that are not tied to document parsing; use `create-update-vector-search-index` for those tasks."
 ---
 
 # Parse Documents → Vector Search Index
 
-Generate a Databricks SQL notebook that parses documents from a UC Volume using `ai_parse_document`, chunks the extracted content, writes to a Delta table, and creates a Vector Search index.
+Generate a Databricks notebook (SQL + Python cells) that parses documents from a UC Volume using `ai_parse_document`, chunks the extracted content, writes to a Delta table, and creates a Vector Search index.
 
 ## Prerequisites
 
@@ -28,12 +28,14 @@ Collect these before generating the notebook:
 | VS endpoint name | `vs_endpoint` | Yes (create or reuse) |
 | VS index name | `catalog.schema.docs_index` | Yes |
 | Chunking strategy | `page`, `token`, `semantic` | Yes |
+| Token chunk size | `512` | Optional (token strategy) |
+| Token overlap | `50` | Optional (token strategy) |
 | Embedding approach | `compute` (Databricks-managed) or `pre-computed` | Yes |
 | Embedding model | `databricks-gte-large-en` | If compute |
 
 ### Step 2: Generate Notebook Cells
 
-The notebook has 5 sections. See [references/notebook_cells.md](references/notebook_cells.md) for the complete SQL templates for each cell.
+The notebook has 5 sections. See [references/notebook_cells.md](references/notebook_cells.md) for complete SQL + Python templates for each cell.
 
 **Cell 1 — Configuration**: Parameters widget with all user inputs.
 
@@ -41,7 +43,7 @@ The notebook has 5 sections. See [references/notebook_cells.md](references/noteb
 
 **Cell 3 — Chunk**: Apply the chosen chunking strategy to the parsed elements. See [references/chunking_strategies.md](references/chunking_strategies.md) for all three strategies.
 
-**Cell 4 — Write Delta Table**: Create the final chunked table with `id`, `chunk_text`, `source_file`, `page_number`, and metadata columns. Enable Change Data Feed (required for delta-sync indexes).
+**Cell 4 — Write Delta Table**: Create the final chunked table with `chunk_id`, `chunk_text`, `source_file`, `page_id`, and metadata columns. Enable Change Data Feed (required for delta-sync indexes).
 
 **Cell 5 — Create VS Index**: Create endpoint (if new), create delta-sync index with managed embeddings, trigger sync.
 
@@ -50,7 +52,12 @@ The notebook has 5 sections. See [references/notebook_cells.md](references/noteb
 After the user runs the notebook, verify the index is ready:
 
 ```sql
-SELECT * FROM vector_search('catalog.schema.docs_index', 'test query', num_results => 3)
+SELECT *
+FROM vector_search(
+  index => 'catalog.schema.docs_index',
+  query_text => 'test query',
+  num_results => 3
+)
 ```
 
 ## Chunking Strategy Selection
@@ -84,6 +91,6 @@ Default recommendation: **page-based** for most use cases. Use token-based for l
 ## Next Steps
 
 After the index is created:
-1. **Add as agent tool** — See **add-tools** skill to wire the VS index into your agent and grant permissions in `databricks.yml`
-2. **Discover the index** — Run `uv run discover-tools` to see the new index and its MCP URL
-3. **Test retrieval** — Use the `vector_search()` SQL function or query via the agent
+1. **Add as agent tool (external dependency)** — Use your external `add-tools` workflow (not in this repo) to wire the index into your agent and grant permissions in `databricks.yml`
+2. **Discover tool metadata (external dependency)** — If your environment includes the external discovery workflow, run `uv run discover-tools` to fetch MCP URLs
+3. **Local fallback** — Test retrieval with `vector_search()` SQL and the Python `VectorSearchClient` directly
