@@ -9,7 +9,6 @@ Skills that extend [Databricks Assistant](https://docs.databricks.com/aws/en/ass
 | **[improve-genie-space](./improve-genie-space/)** | `/improve-genie-space` | Analyze and optimize Genie Space (AI/BI Dashboard) configurations against best practices |
 | **[multi-agent-architecture](./multi-agent-architecture/)** | `/multi-agent-architecture` | Design multi-agent architectures for PoC/hackathon/MVP projects with Excalidraw diagrams |
 | **[parse-documents](./parse-documents/)** | — | Parse and chunk documents for ingestion |
-| **[create-update-vector-search-index](./create-update-vector-search-index/)** | — | Create or update Databricks Vector Search indexes |
 
 ## Setup
 
@@ -68,7 +67,6 @@ databricks-agent-skills/
 │   └── references/
 ├── multi-agent-architecture/
 ├── parse-documents/
-├── create-update-vector-search-index/
 ├── scripts/                     # Dev tooling
 │   ├── manage-skills.sh
 │   └── mermaid-to-excalidraw.mjs

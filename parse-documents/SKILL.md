@@ -1,6 +1,6 @@
 ---
 name: parse-documents
-description: "Build a document-ingestion pipeline for RAG from Unity Catalog Volume files using `ai_parse_document`, chunking, Delta tables, and optional initial Vector Search index creation. Use when: (1) User wants to parse PDFs, DOCX, PPTX, or images into structured text, (2) User asks for ai_parse_document notebook templates or chunking strategy selection, (3) User needs end-to-end document-to-index ingestion from raw files. Do not use for standalone Vector Search endpoint/index lifecycle operations that are not tied to document parsing; use `create-update-vector-search-index` for those tasks."
+description: "Build a document-ingestion pipeline for RAG from Unity Catalog Volume files using `ai_parse_document`, chunking, Delta tables, and optional initial Vector Search index creation. Use when: (1) User wants to parse PDFs, DOCX, PPTX, or images into structured text, (2) User asks for ai_parse_document notebook templates or chunking strategy selection, (3) User needs end-to-end document-to-index ingestion from raw files. Do not use for standalone Vector Search endpoint/index lifecycle operations that are not tied to document parsing."
 ---
 
 # Parse Documents → Vector Search Index
