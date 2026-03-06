@@ -107,7 +107,15 @@ print(f"Saved parsed elements to {raw_table}")
 
 ## Cell 3: Chunk Content
 
-Choose ONE of the three strategies below based on the `chunk_strategy` parameter.
+Route to the correct strategy based on the `chunk_strategy` widget parameter. Generate a single Cell 3 that dispatches to the chosen strategy:
+
+```python
+strategy = dbutils.widgets.get("chunk_strategy").strip().lower()
+if strategy not in ("page", "token", "semantic"):
+    raise ValueError(f"Unknown chunk_strategy: '{strategy}'. Must be one of: page, token, semantic")
+```
+
+Then include ONLY the matching strategy code block below.
 
 ### Page-Based Chunking
 
@@ -241,7 +249,7 @@ doc_text = (
         F.expr("concat_ws('\\n\\n', transform(ordered_elements, x -> x.element_content))")
     )
     .withColumn(
-        "page_id",
+        "start_page_id",
         F.expr("try_element_at(transform(ordered_elements, x -> x.page_id), 1)")
     )
 )
@@ -253,7 +261,7 @@ chunks = (
         F.monotonically_increasing_id().alias("chunk_id"),
         F.col("chunks.chunk_text").alias("chunk_text"),
         "source_file",
-        "page_id",
+        F.col("start_page_id").alias("page_id"),
         "source_path",
         F.col("chunks.chunk_index").alias("chunk_index"),
         F.lit(None).cast("string").alias("section_heading")
@@ -462,7 +470,9 @@ except Exception as e:
 idx = vsc.get_index(index_name=index_name)
 idx.sync()
 
-while True:
+MAX_WAIT_SECONDS = 1800  # 30-minute timeout
+elapsed = 0
+while elapsed < MAX_WAIT_SECONDS:
     status = idx.describe().get("status", {})
     if status.get("ready", False):
         print("Index is ready")
@@ -472,9 +482,12 @@ while True:
     if detailed_state in {"FAILED", "ERROR"}:
         raise RuntimeError(f"Index sync failed: {status}")
 
-    print(f"Index status: {status.get('message', 'syncing')}")
+    print(f"Index status: {status.get('message', 'syncing')} ({elapsed}s elapsed)")
     time.sleep(30)
+    elapsed += 30
     idx = vsc.get_index(index_name=index_name)
+else:
+    raise TimeoutError(f"Index sync did not complete within {MAX_WAIT_SECONDS}s. Last status: {status}")
 ```
 
 ### Option B: Pre-Computed Embeddings

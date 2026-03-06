@@ -39,6 +39,8 @@ Read `scripts/run_benchmark.py` for the implementation, then execute each select
   ```
 - **Databricks notebook**: Read the script to understand the implementation. For each selected question, create a new notebook code cell containing the function definition and a call to it. Replace any `sys.exit()` calls with `raise` statements. Run the cell and read its output before proceeding to the next question. Report progress in the chat after each cell completes.
 
+**Pacing:** Wait ~2 seconds between benchmark calls to avoid rate limiting, especially for spaces with 10+ benchmarks.
+
 After each question completes, report progress:
 ```
 [1/5] "What are the top 5 customers by total spend?" — SQL generated

@@ -1,6 +1,6 @@
 ---
 name: improve-genie-space
-description: 'Analyze, optimize, and improve Databricks Genie Space (AI/BI Dashboard) configurations. Use when users want to: (1) evaluate a Genie Space against best practices, (2) audit space configuration quality, (3) get recommendations for improving their Genie Space, or (4) optimize Genie Space performance. Triggers on: "improve genie space", "analyze genie space", "optimize genie", "audit genie", "review genie space", "genie best practices".'
+description: 'Analyze, optimize, and improve Databricks Genie Space configurations for better SQL generation accuracy. Use when users want to: (1) evaluate a Genie Space against best practices, (2) audit space configuration quality, (3) get recommendations for improving their Genie Space, (4) optimize Genie Space performance, or (5) troubleshoot why Genie is giving wrong answers. Triggers on: "improve genie space", "analyze genie space", "optimize genie", "audit genie", "review genie space", "genie best practices", "genie room", "genie accuracy", "genie SQL generation", "genie configuration", "genie setup", "why is genie giving wrong answers", "genie not working correctly".'
 ---
 
 # Improve Genie Space
@@ -43,7 +43,7 @@ Read `scripts/fetch_space.py` for the implementation, then execute it:
   space_config
   ```
 
-This outputs JSON with keys: `title`, `description`, `space_id`, `warehouse_id`, `serialized_space` (parsed dict).
+This outputs JSON with keys: `title`, `description`, `space_id`, `warehouse_id`, `workspace_host`, `serialized_space` (parsed dict).
 
 ### Step 2b: Save Raw Config
 

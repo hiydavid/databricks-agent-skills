@@ -8,6 +8,8 @@ Evaluate each item against the serialized space JSON. For each item, determine:
 
 Provide a brief explanation for each assessment and, for any fail/warning, give a specific actionable fix referencing actual table names, column names, or instruction text from the space.
 
+**Version detection:** First check `serialized_space.version`. If `2`, use v2 field names (`enable_format_assistance`, `enable_entity_matching`). If `1`, use v1 field names (`get_example_values`, `build_value_dictionary`). Do not mix v1 and v2 fields — v2 spaces reject v1 fields and vice versa.
+
 ---
 
 ## Data Sources
@@ -35,34 +37,34 @@ Provide a brief explanation for each assessment and, for any fail/warning, give 
 ### Columns
 
 **Column Descriptions**
-- Check: `data_sources.tables[].columns[].description`
+- Check: `data_sources.tables[].column_configs[].description`
 - Why: Column descriptions help Genie map user questions to the right columns. Descriptions should provide context beyond what the column name conveys.
 - Fail if: Columns with non-obvious names have no description
 - Good: `"description": "Total revenue in USD after discounts and before tax"`
 - Bad: `"description": "amount"` (just restates the column name)
 
 **Column Synonyms**
-- Check: `data_sources.tables[].columns[].synonyms` array
+- Check: `data_sources.tables[].column_configs[].synonyms` array
 - Why: Users use varied terminology. Synonyms map business language to column names.
 - Warning if: Key business columns lack synonyms
 - Good: Column `total_sales` with `"synonyms": ["revenue", "sales amount", "total revenue"]`
 
 **Example Values Enabled**
-- Check: `data_sources.tables[].columns[].get_example_values` (v1) or `enable_format_assistance` (v2) depending on space version
+- Check: `data_sources.tables[].column_configs[].get_example_values` (v1) or `enable_format_assistance` (v2) depending on space version
 - Why: Example values help Genie understand the data distribution and generate correct filter values.
 - Warning if: Filterable columns (strings, categoricals) don't have `get_example_values: true` (v1) or `enable_format_assistance: true` (v2)
 - Note: v2 spaces reject `get_example_values` — use `enable_format_assistance` instead
 
 **Value Dictionary Enabled**
-- Check: `data_sources.tables[].columns[].build_value_dictionary` (v1) or `enable_entity_matching` (v2) depending on space version
+- Check: `data_sources.tables[].column_configs[].build_value_dictionary` (v1) or `enable_entity_matching` (v2) depending on space version
 - Why: For columns with a small set of discrete values (e.g., status, region, category), a value dictionary lets Genie match user terms to exact values.
 - Warning if: Low-cardinality categorical columns don't have `build_value_dictionary: true` (v1) or `enable_entity_matching: true` (v2)
 - Note: v2 spaces reject `build_value_dictionary` — use `enable_entity_matching` instead
 
 **Irrelevant Columns Hidden**
-- Check: Whether columns unrelated to the space's purpose are included
-- Why: Extra columns increase ambiguity. Hide columns users won't query.
-- Warning if: Columns like internal IDs, audit timestamps, or ETL metadata are exposed
+- Check: `data_sources.tables[].column_configs[].exclude` — columns with `exclude: true` are hidden from Genie
+- Why: Extra columns increase ambiguity. Hide columns users won't query by setting `exclude: true`.
+- Warning if: Columns like internal IDs, audit timestamps, or ETL metadata have `exclude: false` or no `exclude` field
 
 ### Metric Views
 

@@ -1,6 +1,6 @@
 ---
 name: parse-documents
-description: "Build a document-ingestion pipeline for RAG from Unity Catalog Volume files using `ai_parse_document`, chunking, Delta tables, and optional initial Vector Search index creation. Use when: (1) User wants to parse PDFs, DOCX, PPTX, or images into structured text, (2) User asks for ai_parse_document notebook templates or chunking strategy selection, (3) User needs end-to-end document-to-index ingestion from raw files. Do not use for standalone Vector Search endpoint/index lifecycle operations that are not tied to document parsing."
+description: "Build a document-ingestion pipeline for RAG from Unity Catalog Volume files using `ai_parse_document`, chunking, Delta tables, and optional initial Vector Search index creation. Use when: (1) User wants to parse PDFs, DOCX, PPTX, or images into structured text, (2) User asks for ai_parse_document notebook templates or chunking strategy selection, (3) User needs end-to-end document-to-index ingestion from raw files, (4) User wants to ingest documents for RAG, (5) User asks to parse PDFs into chunks, (6) User needs a document processing or chunking pipeline, (7) User wants to load documents into vector search. Triggers on: 'parse documents', 'ingest documents', 'document pipeline', 'ai_parse_document', 'chunking pipeline', 'parse PDFs', 'document to vector search', 'RAG ingestion', 'document processing pipeline', 'parse and chunk'. Do not use for standalone Vector Search endpoint/index lifecycle operations that are not tied to document parsing."
 ---
 
 # Parse Documents → Vector Search Index
@@ -75,7 +75,7 @@ Default recommendation: **page-based** for most use cases. Use token-based for l
 | Approach | When to use | Notes |
 |----------|------------|-------|
 | **Compute (managed)** | Default. Let Databricks handle embeddings. | Use `databricks-gte-large-en` (recommended). No extra setup. |
-| **Pre-computed** | Already have embeddings or need a custom model. | Must provide `embedding_dimension` and `embedding_vector_column`. |
+| **Pre-computed** | Already have embeddings or need a custom model. | Must provide `embedding_dimension` and `embedding_vector_column`. User needs to add an embedding column to the Delta table before index creation (e.g., via `ai_query` with an embedding endpoint). |
 
 ## Supported File Formats
 

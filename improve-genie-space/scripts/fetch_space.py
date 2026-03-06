@@ -71,6 +71,7 @@ def fetch_space(space_id: str) -> dict:
         "description": space.description,
         "space_id": space_id,
         "warehouse_id": space.warehouse_id,
+        "workspace_host": client.config.host,
         "serialized_space": json.loads(space.serialized_space),
     }
 
