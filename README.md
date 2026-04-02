@@ -6,7 +6,8 @@ Skills that extend [Databricks Assistant](https://docs.databricks.com/aws/en/ass
 
 | Skill | Slash Command | Description |
 |-------|---------------|-------------|
-| **[improve-genie-space](./improve-genie-space/)** | `/improve-genie-space` | Analyze and optimize Genie Space (AI/BI Dashboard) configurations against best practices |
+| **[genie-space-diagnostics](./genie-space-diagnostics/)** | `/genie-space-diagnostics` | Audit Genie Space configuration against best practices with prioritized remediation plan |
+| **[genie-space-optimizer](./genie-space-optimizer/)** | `/genie-space-optimizer` | Benchmark-driven iterative optimization of Genie Space accuracy using the Benchmark API |
 | **[multi-agent-architecture](./multi-agent-architecture/)** | `/multi-agent-architecture` | Design multi-agent architectures for PoC/hackathon/MVP projects with Excalidraw diagrams |
 | **[parse-documents](./parse-documents/)** | — | Parse and chunk documents for ingestion |
 
@@ -58,10 +59,11 @@ The Assistant automatically discovers skills in agent mode. See the [Databricks 
 
 ```
 databricks-agent-skills/
-├── commands/                    # Skill definitions (symlinked into projects as slash commands)
-│   ├── improve-genie-space.md
-│   └── multi-agent-architecture.md
-├── improve-genie-space/         # Skill resources (each folder with SKILL.md)
+├── genie-space-diagnostics/     # Static audit of Genie Space configuration
+│   ├── SKILL.md
+│   ├── scripts/
+│   └── references/
+├── genie-space-optimizer/       # Benchmark-driven iterative optimization
 │   ├── SKILL.md
 │   ├── scripts/
 │   └── references/

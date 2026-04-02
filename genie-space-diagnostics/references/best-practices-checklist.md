@@ -187,3 +187,32 @@ Provide a brief explanation for each assessment and, for any fail/warning, give 
 - Check: Whether sample questions cover the space's key capabilities
 - Why: Sample questions should showcase the most valuable query patterns and guide users toward what the space does well.
 - Warning if: Sample questions are generic or don't reflect the space's data
+
+---
+
+## Remediation Priority Guide
+
+When generating the prioritized remediation plan, assign each fix to a tier:
+
+### Critical (must fix) — `fail` items
+These directly cause incorrect answers. Fix before running the optimizer.
+- Missing table/column descriptions → wrong table/column selection
+- No example SQLs → Genie can't learn complex patterns
+- No text instructions → no business context for SQL generation
+- Missing parameter descriptions → incorrect parameterized queries
+
+### Recommended (should fix) — `warning` items affecting accuracy
+These reduce answer quality. Fix before or during optimization.
+- Missing column synonyms → user terminology not mapped
+- Example values / value dictionary not enabled → wrong filter values
+- Missing join specs (multi-table spaces) → wrong or missing joins
+- Insufficient benchmark questions → can't measure or improve accuracy
+- No SQL snippets for common patterns → inconsistent aggregations/filters
+- Irrelevant columns not hidden → increased ambiguity
+
+### Nice-to-Have — `warning` items affecting UX only
+These improve user experience but don't affect SQL accuracy.
+- Missing sample questions → no UI starting points
+- Verbose instructions → token waste but no accuracy impact
+- Missing usage guidance on examples → suboptimal but not wrong
+- Generic sample questions → poor discoverability
