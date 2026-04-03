@@ -24,6 +24,7 @@ These errors indicate Genie selected wrong tables, columns, or joins — a schem
 | `LLM_JUDGE_MISSING_OR_INCORRECT_JOIN` | Genie used wrong join or missed a join entirely | Add/fix `instructions.join_specs` between the relevant tables. Include `comment` (business context) and `instruction` (when to use). For multi-column joins, use separate join specs with cross-referencing comments. |
 | `LLM_JUDGE_MISSING_JOIN` | Genie omitted a required join | Add `instructions.join_specs` for the missing relationship. Check if related tables have clear descriptions that indicate how they relate. |
 | `RESULT_MISSING_COLUMNS` | Output is missing expected columns | Check if the expected columns have clear descriptions. Add synonyms if user question uses different terminology. Verify columns are not excluded (`exclude: true`). |
+| `LLM_JUDGE_WRONG_COLUMNS` | Genie selected the wrong columns in SELECT | Improve `column_configs[].description` for misused columns. Add `column_configs[].synonyms` if user terminology differs from column names. Check if irrelevant columns should be excluded (`exclude: true`) to reduce noise. |
 | `RESULT_EXTRA_COLUMNS` | Output has unexpected extra columns | Improve table/column descriptions to clarify which columns are relevant. Consider setting `exclude: true` on noise columns. |
 | `COLUMN_TYPE_DIFFERENCE` | Values match but types differ | Check column descriptions — clarify expected types. May indicate a CAST is needed, which should be added as an expression snippet. |
 
@@ -102,3 +103,13 @@ When a benchmark result has multiple assessment reasons, prioritize the upstream
 3. If it includes only interpretation/compliance reasons → instruction fix
 
 If reasons span multiple categories, create fixes in all relevant categories but apply them in order (UC metadata first, then SQL examples, then instructions).
+
+---
+
+## Benchmark Quality Signals
+
+These assessment reasons indicate problems with the benchmark itself, not with the space configuration. They cannot be fixed by config changes.
+
+| Assessment Reason | Root Cause | Action |
+|---|---|---|
+| `EMPTY_GOOD_SQL` | The benchmark's expected SQL returned no rows — the benchmark question is broken or the underlying data has changed | Flag to the user for benchmark question review or removal. Skip this question in fix analysis — no config change can fix a broken benchmark. |

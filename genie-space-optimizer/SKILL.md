@@ -121,13 +121,15 @@ Read `references/fix-taxonomy.md` for the full mapping of `assessment_reasons` t
 For each `BAD` or `NEEDS_REVIEW` result, read its `assessment_reasons` and classify into:
 
 1. **UC Metadata errors** — wrong table/column selection, missing/wrong joins
-   - Triggered by: `LLM_JUDGE_INCORRECT_TABLE_OR_FIELD_USAGE`, `LLM_JUDGE_MISSING_OR_INCORRECT_JOIN`, `LLM_JUDGE_MISSING_JOIN`, `RESULT_MISSING_COLUMNS`, `RESULT_EXTRA_COLUMNS`, `COLUMN_TYPE_DIFFERENCE`
+   - Triggered by: `LLM_JUDGE_INCORRECT_TABLE_OR_FIELD_USAGE`, `LLM_JUDGE_WRONG_COLUMNS`, `LLM_JUDGE_MISSING_OR_INCORRECT_JOIN`, `LLM_JUDGE_MISSING_JOIN`, `RESULT_MISSING_COLUMNS`, `RESULT_EXTRA_COLUMNS`, `COLUMN_TYPE_DIFFERENCE`
 
 2. **SQL Example errors** — wrong aggregation, function usage, incomplete output
    - Triggered by: `LLM_JUDGE_WRONG_AGGREGATION`, `LLM_JUDGE_MISSING_OR_INCORRECT_AGGREGATION`, `LLM_JUDGE_INCORRECT_FUNCTION_USAGE`, `LLM_JUDGE_INCOMPLETE_OR_PARTIAL_OUTPUT`, `LLM_JUDGE_FORMATTING_ERROR`, `LLM_JUDGE_SYNTAX_ERROR`, `EMPTY_RESULT`, `RESULT_MISSING_ROWS`, `RESULT_EXTRA_ROWS`
 
 3. **Instruction / Business Logic errors** — misinterpretation, missing business rules, wrong filters/metrics
    - Triggered by: `LLM_JUDGE_MISINTERPRETATION_OF_USER_REQUEST`, `LLM_JUDGE_INSTRUCTION_COMPLIANCE_OR_MISSING_BUSINESS_LOGIC`, `LLM_JUDGE_WRONG_FILTER`, `LLM_JUDGE_MISSING_OR_INCORRECT_FILTER`, `LLM_JUDGE_INCORRECT_METRIC_CALCULATION`, `LLM_JUDGE_SEMANTIC_ERROR`, `LLM_JUDGE_OTHER`, `SINGLE_CELL_DIFFERENCE`
+
+**Benchmark quality signal:** If a result has `EMPTY_GOOD_SQL`, the benchmark's expected SQL returned no rows — the benchmark itself is broken. Flag it to the user for review/removal and exclude it from fix analysis.
 
 A single result may have reasons in multiple categories. Assign it to the **most upstream** category (UC metadata > SQL examples > Instructions).
 
