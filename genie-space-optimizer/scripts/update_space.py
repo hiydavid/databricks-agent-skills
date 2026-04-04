@@ -2,6 +2,10 @@
 """
 Update an existing Databricks Genie Space's serialized configuration in-place.
 
+Uses the REST API directly (PATCH /api/2.0/genie/spaces/{space_id}) to ensure
+compatibility across SDK versions — the SDK's update_space() method does not
+reliably support serialized_space updates.
+
 Usage: python update_space.py <space_id> <updated_config_path>
 Output: JSON to stdout with space_id, title, status
 Exit codes: 0 success, 1 error (message to stderr)
@@ -16,20 +20,8 @@ import json
 import sys
 
 
-def update_space(space_id: str, updated_serialized_space: dict) -> dict:
-    """Update an existing Genie Space's serialized configuration.
-
-    The space's title, description, and warehouse_id are preserved.
-    Only the serialized_space (config, data_sources, instructions, benchmarks)
-    is replaced with the updated version.
-
-    Args:
-        space_id: The Genie Space ID to update.
-        updated_serialized_space: The new serialized_space dict.
-
-    Returns:
-        dict with space_id, title, and update status.
-    """
+def _get_client():
+    """Initialize and return a Databricks WorkspaceClient."""
     try:
         from databricks.sdk import WorkspaceClient
     except ImportError:
@@ -40,7 +32,7 @@ def update_space(space_id: str, updated_serialized_space: dict) -> dict:
         sys.exit(1)
 
     try:
-        client = WorkspaceClient()
+        return WorkspaceClient()
     except Exception as e:
         print(
             f"Error: Failed to initialize Databricks client. "
@@ -49,12 +41,53 @@ def update_space(space_id: str, updated_serialized_space: dict) -> dict:
         )
         sys.exit(1)
 
-    # Update the space with the new serialized config
+
+def update_space(space_id: str, updated_serialized_space: dict) -> dict:
+    """Update an existing Genie Space's serialized configuration in-place.
+
+    Fetches the current space to preserve title, description, and warehouse_id,
+    then PATCHes the space with the updated serialized_space via the REST API.
+
+    Args:
+        space_id: The Genie Space ID to update.
+        updated_serialized_space: The new serialized_space dict.
+
+    Returns:
+        dict with space_id, title, and update status.
+    """
+    client = _get_client()
+
+    # Fetch current space metadata to preserve title/description/warehouse_id
     try:
-        updated_space = client.genie.update_space(
-            space_id=space_id,
-            serialized_space=json.dumps(updated_serialized_space, ensure_ascii=False),
-        )
+        space = client.genie.get_space(space_id=space_id)
+    except Exception as e:
+        error_msg = str(e)
+        if "PERMISSION_DENIED" in error_msg or "403" in error_msg:
+            print(
+                f"Error: Permission denied. You need CAN EDIT permission on space '{space_id}'.",
+                file=sys.stderr,
+            )
+        elif "NOT_FOUND" in error_msg or "404" in error_msg:
+            print(
+                f"Error: Genie Space '{space_id}' not found. Check the space ID.",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Error: Failed to fetch space '{space_id}': {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # PATCH the space via REST API — SDK update_space() does not reliably
+    # accept serialized_space; using api_client.do() bypasses that limitation.
+    path = f"/api/2.0/genie/spaces/{space_id}"
+    body = {
+        "title": space.title,
+        "description": space.description or "",
+        "warehouse_id": space.warehouse_id,
+        "serialized_space": json.dumps(updated_serialized_space, ensure_ascii=False),
+    }
+
+    try:
+        client.api_client.do("PATCH", path, body=body)
     except Exception as e:
         error_msg = str(e)
         if "PERMISSION_DENIED" in error_msg or "403" in error_msg:
@@ -73,7 +106,7 @@ def update_space(space_id: str, updated_serialized_space: dict) -> dict:
 
     return {
         "space_id": space_id,
-        "title": updated_space.title,
+        "title": space.title,
         "status": "updated",
     }
 
