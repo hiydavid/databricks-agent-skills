@@ -172,11 +172,20 @@ Based on the failed results in the current category, generate specific config ch
 
 Use the expected SQL from the benchmark results as the primary source for generating fixes. The expected SQL shows exactly what Genie should have produced — reverse-engineer what config changes would guide Genie to that output.
 
-**Validate against `references/space-schema.md`:**
-- All new IDs must be 32-char lowercase hex
-- Check version (v1 vs v2) and use correct field names
-- Collections with IDs must be sorted alphabetically
-- Join spec `sql` elements must be single equality expressions
+**Config generation rules (must follow all of these):**
+
+1. **Preserve all existing IDs** — never change or remove `id` fields already in the config.
+2. **New items need 32-char lowercase hex IDs** — generate with:
+   ```python
+   import secrets; print(secrets.token_hex(16))
+   ```
+3. **`description` fields must be arrays in v2 configs** — use `["Your description text"]`, not a bare string.
+4. **`synonyms` fields must be arrays** — use `["term1", "term2"]`.
+5. **Collections with `id` or `identifier` fields must be sorted alphabetically** — this applies to tables, column_configs, join_specs, example_question_sqls, sql_snippets arrays, etc.
+6. **`text_instructions`: max 1 entry** — if one already exists, append new content to its `content` array rather than creating a second entry.
+7. **Never modify the `benchmarks` section** — do not add, edit, or remove benchmark questions.
+8. **`config.version` must remain `2`** — do not downgrade it.
+9. **Join spec `sql` must have exactly 2 elements** — the first must be a single equality expression (no `AND`/`OR`). Example: `["orders.customer_id = customers.id", "LEFT JOIN customers ON orders.customer_id = customers.id"]`.
 
 ### Step 10: Present Changes for User Approval
 
@@ -216,15 +225,34 @@ python scripts/snapshot_space.py save <space_id> v1_pre_uc_metadata --accuracy <
 1. Deep copy the current `serialized_space` dict
 2. Apply all approved changes to produce the updated config
 3. Save the updated config to `reports/<space_id>/updated-config.json`
-4. Apply via `scripts/update_space.py`:
+
+4. **Validate and normalize the config before pushing:**
 
    - **Claude Code**:
      ```bash
-     python scripts/update_space.py <space_id> reports/<space_id>/updated-config.json
+     python scripts/validate_space.py reports/<space_id>/updated-config.json --normalize > reports/<space_id>/validated-config.json
      ```
-   - **Notebook**: Call `update_space(space_id, updated_config)`.
+   - **Notebook**: Import and call:
+     ```python
+     from validate_space import normalize_serialized_space, validate_serialized_space
+     normalized = normalize_serialized_space(updated_config)
+     result = validate_serialized_space(normalized)
+     print(result["errors"], result["warnings"])
+     ```
 
-5. Save post-change snapshot:
+   - **If validation returns errors**: fix the issues in `updated-config.json` and re-validate. Do not push a config with errors.
+   - **If validation returns only warnings**: note them, then proceed.
+   - Use `validated-config.json` (normalized output) as input to `update_space.py`.
+
+5. Apply via `scripts/update_space.py`:
+
+   - **Claude Code**:
+     ```bash
+     python scripts/update_space.py <space_id> reports/<space_id>/validated-config.json
+     ```
+   - **Notebook**: Call `update_space(space_id, normalized_config)`.
+
+6. Save post-change snapshot:
    ```bash
    python scripts/snapshot_space.py save <space_id> v1_uc_metadata --summary "Applied UC metadata fixes: X changes"
    ```
