@@ -82,7 +82,7 @@ These errors indicate Genie selected wrong tables, columns, or joins — a schem
 
 | Fix Action | Config Path | Best Practice |
 |---|---|---|
-| Add or fix join spec with correct condition | `instructions.join_specs[].left`, `.right`, `.join_type`, `.sql` | Join Specs for Multi-Table Relationships |
+| Add or fix join spec with correct condition | `instructions.join_specs[].left`, `.right`, `.sql` | Join Specs for Multi-Table Relationships |
 | Add business context comment | `instructions.join_specs[].comment` | Join Specs Have Comments |
 | Add usage instruction for when to apply this join | `instructions.join_specs[].instruction` | Join Specs Have Comments |
 

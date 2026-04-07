@@ -179,13 +179,15 @@ Use the expected SQL from the benchmark results as the primary source for genera
    ```python
    import secrets; print(secrets.token_hex(16))
    ```
-3. **`description` fields must be arrays in v2 configs** — use `["Your description text"]`, not a bare string.
-4. **`synonyms` fields must be arrays** — use `["term1", "term2"]`.
-5. **Collections with `id` or `identifier` fields must be sorted alphabetically** — this applies to tables, column_configs, join_specs, example_question_sqls, sql_snippets arrays, etc.
-6. **`text_instructions`: max 1 entry** — if one already exists, append new content to its `content` array rather than creating a second entry.
-7. **Never modify the `benchmarks` section** — do not add, edit, or remove benchmark questions.
-8. **`config.version` must remain `2`** — do not downgrade it.
-9. **Join spec `sql` must have exactly 2 elements** — the first must be a single equality expression (no `AND`/`OR`). Example: `["orders.customer_id = customers.id", "LEFT JOIN customers ON orders.customer_id = customers.id"]`.
+3. **These fields MUST always be arrays of strings, never bare strings:** `description`, `question`, `content`, `sql`, `synonyms`, `comment`, `instruction`, `usage_guidance`. For example: `"description": ["Some text"]`, not `"description": "Some text"`.
+4. **Collections with `id`, `identifier`, or `column_name` fields must be sorted alphabetically** — this applies to tables, column_configs, join_specs, example_question_sqls, sql_snippets arrays, etc.
+5. **`text_instructions`: max 1 entry** — if one already exists, append new content to its `content` array rather than creating a second entry.
+6. **Never modify the `benchmarks` section** — do not add, edit, or remove benchmark questions.
+7. **`config.version` must remain `2`** — do not downgrade it.
+8. **Join spec `sql` must have exactly 2 elements** — `[equality_expression, relationship_type_annotation]`. The first must be a single equality expression (no `AND`/`OR`). The second must be a relationship type annotation. Example: `["orders.customer_id = customers.id", "--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--"]`. Valid annotations: `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_MANY--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_ONE--`, `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_MANY--`. For multi-column joins, create separate join_spec entries.
+9. **`example_question_sqls` must teach generalizable SQL patterns** — each example should demonstrate a reusable technique (e.g., window functions for ranking, CASE expressions for categorization). The `question` field should be a generic template (e.g., "What is the top N [metric] by [dimension]?"), not a specific business question.
+10. **Never create examples that echo benchmarks** — do not create `example_question_sqls` whose `question` or `sql` closely matches any benchmark question or SQL. Generalize both the question AND the SQL pattern.
+11. **Prefer `sql_snippets` and `text_instructions` over `example_question_sqls`** when the fix only requires teaching a specific calculation, filter pattern, or business rule. Use `example_question_sqls` only when the fix requires demonstrating a multi-step SQL pattern that cannot be captured in a snippet.
 
 ### Step 10: Present Changes for User Approval
 
@@ -200,7 +202,7 @@ Show proposed changes grouped by type:
 3. [column: orders.region] Enable enable_entity_matching (was: false)
 
 ### Join Spec Changes
-1. Add join spec: orders ↔ customers on orders.customer_id = customers.id (LEFT JOIN)
+1. Add join spec: orders ↔ customers on orders.customer_id = customers.id (MANY_TO_ONE)
    Comment: "Link orders to customer details"
    Instruction: "Use when question involves customer attributes"
 

@@ -20,13 +20,65 @@ Requires no external dependencies beyond Python stdlib.
 import json
 import re
 import sys
+from collections import Counter
+from typing import Any
 
 
-# Fields that must be arrays of strings (not bare strings) in v2 configs
-_ARRAY_STRING_FIELDS = {"description", "synonyms", "content"}
+# Fields that must be arrays of strings (not bare strings) in v2 configs.
+# Per the Genie API: https://docs.databricks.com/aws/en/genie/conversation-api
+_ARRAY_STRING_FIELDS = {
+    "description",
+    "question",
+    "content",
+    "sql",
+    "synonyms",
+    "comment",
+    "instruction",
+    "usage_guidance",
+}
 
 # Regex for 32-character lowercase hex IDs
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+# Valid relationship type annotations for join_specs sql[1]
+_VALID_RELATIONSHIP_TYPES = {
+    "--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--",
+    "--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_MANY--",
+    "--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_ONE--",
+    "--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_MANY--",
+}
+
+# Jaccard similarity threshold for benchmark overlap detection
+_OVERLAP_SIMILARITY_THRESHOLD = 0.9
+
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+
+
+def _as_list(value: Any) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _text_from_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return " ".join(str(v).strip() for v in value if str(v).strip()).strip()
+    return str(value).strip()
+
+
+def _column_configs(table: dict) -> list[dict]:
+    if isinstance(table.get("column_configs"), list):
+        return table["column_configs"]
+    if isinstance(table.get("columns"), list):
+        return table["columns"]
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -49,21 +101,39 @@ def _wrap_string_fields(obj):
     return obj
 
 
+def _fix_snippet_fields(config: dict) -> dict:
+    """Fix common LLM mistakes in sql_snippets: wrong field names and wrapped scalars."""
+    snippets = config.get("instructions", {}).get("sql_snippets", {})
+    for category in ("filters", "expressions", "measures"):
+        for item in snippets.get(category, []):
+            # Rename 'name' -> 'display_name' (common LLM mistake)
+            if "name" in item and "display_name" not in item:
+                item["display_name"] = item.pop("name")
+            # Unwrap scalar fields that the API expects as plain strings
+            for field in ("display_name", "alias"):
+                val = item.get(field)
+                if isinstance(val, list) and len(val) == 1:
+                    item[field] = val[0]
+    return config
+
+
 def _sort_by_id(obj):
-    """Recursively sort lists whose elements have an 'id' or 'identifier' key."""
+    """Recursively sort lists whose elements have an 'id', 'identifier', or 'column_name' key."""
     if isinstance(obj, dict):
         return {k: _sort_by_id(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         processed = [_sort_by_id(item) for item in obj]
         if processed and isinstance(processed[0], dict):
             sort_key = None
-            if "id" in processed[0]:
+            if all("id" in item for item in processed):
                 sort_key = "id"
-            elif "identifier" in processed[0]:
+            elif all("identifier" in item for item in processed):
                 sort_key = "identifier"
+            elif all("column_name" in item for item in processed):
+                sort_key = "column_name"
             if sort_key:
                 try:
-                    processed = sorted(processed, key=lambda x: x.get(sort_key, ""))
+                    processed = sorted(processed, key=lambda x: str(x.get(sort_key, "")))
                 except TypeError:
                     pass
         return processed
@@ -73,8 +143,9 @@ def _sort_by_id(obj):
 def normalize_serialized_space(config: dict) -> dict:
     """Normalize a serialized_space dict.
 
-    - Wraps bare string description/synonyms/content fields into arrays
-    - Sorts collections with id/identifier fields alphabetically
+    - Fixes common LLM mistakes in sql_snippets (name -> display_name, unwrap scalars)
+    - Wraps bare string fields into single-element arrays where the API expects arrays
+    - Sorts collections with id/identifier/column_name fields alphabetically
 
     Args:
         config: The serialized_space dict (parsed JSON).
@@ -82,9 +153,78 @@ def normalize_serialized_space(config: dict) -> dict:
     Returns:
         Normalized copy of config.
     """
+    import copy
+    config = copy.deepcopy(config)
+    config = _fix_snippet_fields(config)
     config = _wrap_string_fields(config)
     config = _sort_by_id(config)
     return config
+
+
+# ---------------------------------------------------------------------------
+# Benchmark overlap detection
+# ---------------------------------------------------------------------------
+
+
+def _tokenize(text: str) -> set[str]:
+    """Lowercase and split into word tokens for similarity comparison."""
+    return set(re.findall(r"\b\w+\b", text.lower()))
+
+
+def _jaccard_similarity(a: str, b: str) -> float:
+    """Compute Jaccard similarity between two text strings."""
+    tokens_a = _tokenize(a)
+    tokens_b = _tokenize(b)
+    if not tokens_a or not tokens_b:
+        return 0.0
+    return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+
+
+def validate_no_benchmark_overlap(config: dict) -> dict:
+    """Check that example_question_sqls don't near-exactly copy benchmark questions.
+
+    Returns dict with 'has_overlap' (bool) and 'violations' (list of dicts).
+    """
+    benchmarks = config.get("benchmarks", {}).get("questions", [])
+    examples = config.get("instructions", {}).get("example_question_sqls", [])
+
+    if not benchmarks or not examples:
+        return {"has_overlap": False, "violations": []}
+
+    benchmark_texts = [
+        (_text_from_value(bq.get("question")), _text_from_value(bq.get("sql")))
+        for bq in benchmarks
+    ]
+
+    violations = []
+    for ex_idx, example in enumerate(examples):
+        ex_question = _text_from_value(example.get("question"))
+        ex_sql = _text_from_value(example.get("sql"))
+
+        for bq_idx, (bq_text, bq_sql) in enumerate(benchmark_texts):
+            q_sim = _jaccard_similarity(ex_question, bq_text)
+            if q_sim >= _OVERLAP_SIMILARITY_THRESHOLD:
+                violations.append({
+                    "example_idx": ex_idx,
+                    "example_id": example.get("id", "?"),
+                    "benchmark_idx": bq_idx,
+                    "type": "question_overlap",
+                    "similarity": round(q_sim, 3),
+                    "example_text": ex_question[:80],
+                    "benchmark_text": bq_text[:80],
+                })
+
+            sql_sim = _jaccard_similarity(ex_sql, bq_sql) if ex_sql and bq_sql else 0.0
+            if sql_sim >= _OVERLAP_SIMILARITY_THRESHOLD:
+                violations.append({
+                    "example_idx": ex_idx,
+                    "example_id": example.get("id", "?"),
+                    "benchmark_idx": bq_idx,
+                    "type": "sql_overlap",
+                    "similarity": round(sql_sim, 3),
+                })
+
+    return {"has_overlap": len(violations) > 0, "violations": violations}
 
 
 # ---------------------------------------------------------------------------
@@ -177,36 +317,33 @@ def validate_serialized_space(config: dict) -> dict:
     # ------------------------------------------------------------------
     # 4. Version-specific constraints (v2+)
     # ------------------------------------------------------------------
+    tables = config.get("data_sources", {}).get("tables", [])
+
     if config_version >= 2:
-        tables = config.get("data_sources", {}).get("tables", [])
-        for table in tables:
+        for t_idx, table in enumerate(tables):
             identifier = table.get("identifier", "?")
-            for col in table.get("column_configs", []):
-                col_id = col.get("id", "?")
-                if col.get("get_example_values"):
+            for c_idx, column in enumerate(_column_configs(table)):
+                if "get_example_values" in column:
                     errors.append(
-                        f"Table '{identifier}' column '{col_id}': 'get_example_values' is "
-                        f"not allowed in v2+ configs — remove it"
+                        f"Table '{identifier}' column_configs[{c_idx}]: "
+                        f"'get_example_values' is v1-only and not allowed in v2 — remove it"
                     )
-                if col.get("build_value_dictionary"):
+                if "build_value_dictionary" in column:
                     errors.append(
-                        f"Table '{identifier}' column '{col_id}': 'build_value_dictionary' is "
-                        f"not allowed in v2+ configs — use 'enable_entity_matching' instead"
+                        f"Table '{identifier}' column_configs[{c_idx}]: "
+                        f"'build_value_dictionary' is v1-only — use 'enable_entity_matching' instead"
                     )
 
     # ------------------------------------------------------------------
     # 5. Table identifiers — must be catalog.schema.table (3 parts)
     # ------------------------------------------------------------------
-    tables = config.get("data_sources", {}).get("tables", [])
-    for table in tables:
+    for t_idx, table in enumerate(tables):
         identifier = table.get("identifier", "")
-        if identifier:
-            parts = identifier.split(".")
-            if len(parts) != 3:
-                errors.append(
-                    f"Table identifier '{identifier}' must have exactly 3 parts "
-                    f"(catalog.schema.table), got {len(parts)}"
-                )
+        if identifier and len(identifier.split(".")) != 3:
+            errors.append(
+                f"data_sources.tables[{t_idx}].identifier '{identifier}' "
+                f"must be three-level namespace (catalog.schema.table)"
+            )
 
     # ------------------------------------------------------------------
     # 6. Max 1 text_instruction entry
@@ -221,69 +358,175 @@ def validate_serialized_space(config: dict) -> dict:
     # ------------------------------------------------------------------
     # 7. Unique question IDs across sample and benchmark questions
     # ------------------------------------------------------------------
-    seen_question_ids = {}
-    for section_name, section_key in [
-        ("benchmarks", "questions"),
-        ("instructions", "example_question_sqls"),
-    ]:
-        section = config.get(section_name, {})
-        for q in section.get(section_key, []):
-            qid = q.get("id")
-            if qid:
-                if qid in seen_question_ids:
-                    errors.append(
-                        f"Duplicate question ID '{qid}' found in both "
-                        f"'{seen_question_ids[qid]}' and '{section_name}.{section_key}'"
-                    )
-                else:
-                    seen_question_ids[qid] = f"{section_name}.{section_key}"
+    sample_ids = [
+        q.get("id")
+        for q in config.get("config", {}).get("sample_questions", [])
+        if isinstance(q, dict)
+    ]
+    benchmark_ids = [
+        q.get("id")
+        for q in config.get("benchmarks", {}).get("questions", [])
+        if isinstance(q, dict)
+    ]
+    all_question_ids = [i for i in sample_ids + benchmark_ids if i]
+    qid_counts = Counter(all_question_ids)
+    dup_qids = sorted(qid for qid, cnt in qid_counts.items() if cnt > 1)
+    if dup_qids:
+        errors.append(
+            "Question IDs must be unique across config.sample_questions and "
+            "benchmarks.questions: " + ", ".join(dup_qids[:5])
+        )
 
     # ------------------------------------------------------------------
-    # 8. Join spec structure
+    # 8. Instruction ID uniqueness across all instruction types
+    # ------------------------------------------------------------------
+    instruction_ids = []
+    instr = config.get("instructions", {})
+    for collection_name in (
+        "text_instructions", "example_question_sqls", "sql_functions", "join_specs",
+    ):
+        for item in instr.get(collection_name, []):
+            if isinstance(item, dict) and item.get("id"):
+                instruction_ids.append(item["id"])
+    for snippet_cat in ("filters", "expressions", "measures"):
+        for item in instr.get("sql_snippets", {}).get(snippet_cat, []):
+            if isinstance(item, dict) and item.get("id"):
+                instruction_ids.append(item["id"])
+    instr_id_counts = Counter(instruction_ids)
+    dup_instr_ids = sorted(id_ for id_, cnt in instr_id_counts.items() if cnt > 1)
+    if dup_instr_ids:
+        errors.append(
+            "Instruction IDs must be unique across all instruction types: "
+            + ", ".join(dup_instr_ids[:5])
+        )
+
+    # ------------------------------------------------------------------
+    # 9. Join spec structure and relationship type annotations
     # ------------------------------------------------------------------
     join_specs = config.get("instructions", {}).get("join_specs", [])
     for i, spec in enumerate(join_specs):
         spec_id = spec.get("id", f"[{i}]")
-        sql_parts = spec.get("sql", [])
+        sql_parts = _as_list(spec.get("sql"))
 
         if len(sql_parts) != 2:
             errors.append(
-                f"join_specs['{spec_id}'].sql must have exactly 2 elements, "
+                f"join_specs['{spec_id}'].sql must have exactly 2 elements "
+                f"(equality expression + relationship type annotation), "
                 f"got {len(sql_parts)}"
             )
-        elif sql_parts:
-            first = sql_parts[0]
-            if re.search(r"\bAND\b|\bOR\b", first, re.IGNORECASE):
+        else:
+            # Validate first element: single equality expression
+            first = _text_from_value(sql_parts[0])
+            if first:
+                if re.search(r"\bAND\b|\bOR\b", first, re.IGNORECASE):
+                    errors.append(
+                        f"join_specs['{spec_id}'].sql[0] contains AND/OR; "
+                        f"use one equality expression per element"
+                    )
+                if first.count("=") != 1:
+                    warnings.append(
+                        f"join_specs['{spec_id}'].sql[0] should contain "
+                        f"exactly one '=' expression"
+                    )
+            else:
+                warnings.append(f"join_specs['{spec_id}'].sql[0] is empty")
+
+            # Validate second element: relationship type annotation
+            second = _text_from_value(sql_parts[1])
+            if second and second not in _VALID_RELATIONSHIP_TYPES:
                 errors.append(
-                    f"join_specs['{spec_id}'].sql[0] must be a single equality expression "
-                    f"— remove AND/OR: '{first[:100]}'"
-                )
-            if "=" not in first:
-                warnings.append(
-                    f"join_specs['{spec_id}'].sql[0] should contain an equality expression: "
-                    f"'{first[:100]}'"
+                    f"join_specs['{spec_id}'].sql[1] has invalid relationship type "
+                    f"'{second}'; must be one of: "
+                    + ", ".join(sorted(_VALID_RELATIONSHIP_TYPES))
                 )
 
     # ------------------------------------------------------------------
-    # 9. description fields should be arrays in v2 (warn if bare string)
+    # 10. Column config uniqueness per (table, column_name)
+    # ------------------------------------------------------------------
+    col_keys: list[str] = []
+    for table in tables:
+        table_id = table.get("identifier", "")
+        for col in _column_configs(table):
+            col_name = col.get("column_name", "")
+            if col_name:
+                col_keys.append(f"{table_id}.{col_name}")
+    col_key_counts = Counter(col_keys)
+    dup_cols = sorted(k for k, cnt in col_key_counts.items() if cnt > 1)
+    if dup_cols:
+        errors.append(
+            "Column configs must be unique per (table, column_name): "
+            + ", ".join(dup_cols[:5])
+        )
+
+    # ------------------------------------------------------------------
+    # 11. SQL snippet sql fields must not be empty
+    # ------------------------------------------------------------------
+    for snippet_cat in ("filters", "expressions", "measures"):
+        for s_idx, item in enumerate(instr.get("sql_snippets", {}).get(snippet_cat, [])):
+            sql_text = _text_from_value(item.get("sql"))
+            if not sql_text:
+                errors.append(
+                    f"instructions.sql_snippets.{snippet_cat}[{s_idx}].sql must not be empty"
+                )
+
+    # ------------------------------------------------------------------
+    # 12. Benchmark answer format (exactly 1 answer with format "SQL")
+    # ------------------------------------------------------------------
+    for b_idx, bq in enumerate(config.get("benchmarks", {}).get("questions", [])):
+        answers = bq.get("answer", [])
+        if len(answers) != 1:
+            errors.append(
+                f"benchmarks.questions[{b_idx}] must have exactly 1 answer, "
+                f"found {len(answers)}"
+            )
+        for a_idx, ans in enumerate(answers):
+            if ans.get("format") != "SQL":
+                errors.append(
+                    f"benchmarks.questions[{b_idx}].answer[{a_idx}].format "
+                    f"must be 'SQL', found '{ans.get('format')}'"
+                )
+
+    # ------------------------------------------------------------------
+    # 13. Array-string field types — warn if bare strings in v2
     # ------------------------------------------------------------------
     if config_version >= 2:
-        def _check_descriptions(obj, path=""):
+        def _check_array_string_fields(obj, path=""):
             if isinstance(obj, dict):
                 for k, v in obj.items():
                     child_path = f"{path}.{k}" if path else k
-                    if k == "description" and isinstance(v, str):
+                    if k in _ARRAY_STRING_FIELDS and isinstance(v, str):
                         warnings.append(
                             f"'{child_path}' is a bare string — in v2 configs it should be "
                             f"an array: [\"{v[:50]}\"]"
                         )
                     else:
-                        _check_descriptions(v, child_path)
+                        _check_array_string_fields(v, child_path)
             elif isinstance(obj, list):
                 for i, item in enumerate(obj):
-                    _check_descriptions(item, f"{path}[{i}]")
+                    _check_array_string_fields(item, f"{path}[{i}]")
 
-        _check_descriptions(config)
+        _check_array_string_fields(config)
+
+    # ------------------------------------------------------------------
+    # 14. Benchmark overlap check (example_question_sqls vs benchmarks)
+    # ------------------------------------------------------------------
+    overlap = validate_no_benchmark_overlap(config)
+    if overlap["has_overlap"]:
+        for v in overlap["violations"]:
+            if v["type"] == "question_overlap":
+                warnings.append(
+                    f"instructions.example_question_sqls[{v['example_idx']}] "
+                    f"question has {v['similarity']:.0%} similarity with benchmark "
+                    f"question #{v['benchmark_idx']} — possible overfitting. "
+                    f"Example: \"{v['example_text']}\" vs "
+                    f"Benchmark: \"{v['benchmark_text']}\""
+                )
+            elif v["type"] == "sql_overlap":
+                warnings.append(
+                    f"instructions.example_question_sqls[{v['example_idx']}] "
+                    f"SQL has {v['similarity']:.0%} similarity with benchmark "
+                    f"question #{v['benchmark_idx']} SQL — possible overfitting"
+                )
 
     return {
         "is_valid": len(errors) == 0,

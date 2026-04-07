@@ -187,9 +187,8 @@ Guidance that shapes how Genie interprets questions and generates SQL.
           "identifier": "catalog.schema.customers",
           "alias": "customers"
         },
-        "join_type": "LEFT JOIN",
-        "sql": ["orders.customer_id = customers.id"],
-        "comment": ["Link orders to customer details; use LEFT JOIN to include orders with unknown customers"],
+        "sql": ["orders.customer_id = customers.id", "--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--"],
+        "comment": ["Link orders to customer details for customer attribute lookups"],
         "instruction": ["Always use this join when relating orders to customer demographics"]
       }
     ]
@@ -197,7 +196,7 @@ Guidance that shapes how Genie interprets questions and generates SQL.
 }
 ```
 
-> **Multi-column joins:** Use separate join specs for each condition — compound `AND` expressions are not supported in the `sql` field. Add `comment` and `instruction` fields to both specs indicating they should always be used together.
+> **Multi-column joins:** Use separate join specs for each condition — compound `AND` expressions are not supported in `sql[0]`. Add `comment` and `instruction` fields to related specs indicating they should always be used together.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -207,8 +206,7 @@ Guidance that shapes how Genie interprets questions and generates SQL.
 | `join_specs[].left.alias` | string | Alias for the left table in the join |
 | `join_specs[].right.identifier` | string | Right table fully qualified name |
 | `join_specs[].right.alias` | string | Alias for the right table in the join |
-| `join_specs[].join_type` | string | Join type (INNER JOIN, LEFT JOIN, etc.) |
-| `join_specs[].sql` | array of strings | Join condition expression segments. Each element must be a single equality expression (e.g., `"t1.col = t2.col"`). Compound conditions with AND/OR are not supported — use separate join specs for multi-column joins. |
+| `join_specs[].sql` | array of 2 strings | `[equality_expression, relationship_type_annotation]`. First element: a single equality expression (e.g., `"t1.col = t2.col"`) — no `AND`/`OR`. Second element: one of `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_MANY--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_ONE--`, `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_MANY--`. |
 | `join_specs[].comment` | array of strings | Business context for the relationship |
 | `join_specs[].instruction` | array of strings | Guidance on when/how to use this join |
 
