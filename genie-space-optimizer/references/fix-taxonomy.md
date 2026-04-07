@@ -16,32 +16,26 @@ This ordering matters because Genie first resolves schema understanding (which t
 
 ## Quick-Reference Matrix
 
-All 25 assessment labels at a glance. **P** = priority within category (P1 = try first).
+All 19 assessment labels at a glance. **P** = priority within category (P1 = try first).
 
 | Label | Category | What Went Wrong | Primary Fix Path(s) | P |
 |---|---|---|---|---|
 | `LLM_JUDGE_INCORRECT_TABLE_OR_FIELD_USAGE` | UC Metadata | Genie's generated SQL references wrong tables, columns, or uses fields that don't match the ground truth SQL's intent. | `tables[].description`, `column_configs[].description`, `column_configs[].synonyms` | P1 |
 | `LLM_JUDGE_MISSING_OR_INCORRECT_JOIN` | UC Metadata | Genie's generated SQL is missing necessary joins between tables or has incorrect join conditions/types that produce wrong results. | `instructions.join_specs[]` | P1 |
-| `LLM_JUDGE_MISSING_JOIN` | UC Metadata | Genie's generated SQL is missing a required join between tables. *(Undocumented in official API docs — narrower variant of MISSING_OR_INCORRECT_JOIN; may be removed.)* | `instructions.join_specs[]` | P1 |
-| `LLM_JUDGE_WRONG_COLUMNS` | UC Metadata | Genie's generated SQL selects wrong columns that don't match the ground truth SQL's intent. *(Undocumented in official API docs — overlaps with INCORRECT_TABLE_OR_FIELD_USAGE; may be removed.)* | `column_configs[].description`, `column_configs[].synonyms` | P2 |
 | `RESULT_MISSING_COLUMNS` | UC Metadata | Genie's generated SQL response is missing columns from the provided ground truth SQL. | `column_configs[].description`, `column_configs[].synonyms` | P2 |
 | `RESULT_EXTRA_COLUMNS` | UC Metadata | Genie's generated SQL response has more columns than the provided ground truth SQL. | `column_configs[].exclude` | P3 |
 | `COLUMN_TYPE_DIFFERENCE` | UC Metadata | The values between the results match but the column type is different. | `column_configs[].description` | P3 |
-| `LLM_JUDGE_WRONG_AGGREGATION` | SQL Examples | Genie's generated SQL uses the wrong aggregate function or GROUP BY clause. *(Undocumented in official API docs — narrower variant of MISSING_OR_INCORRECT_AGGREGATION; may be removed.)* | `example_question_sqls[]`, `sql_snippets.measures[]` | P1 |
 | `LLM_JUDGE_MISSING_OR_INCORRECT_AGGREGATION` | SQL Examples | Genie's generated SQL is missing GROUP BY clauses or has incorrect grouping that doesn't match the requested aggregation level. | `example_question_sqls[]`, `sql_snippets.measures[]` | P1 |
 | `LLM_JUDGE_INCORRECT_FUNCTION_USAGE` | SQL Examples | Genie's generated SQL uses SQL functions incorrectly or inappropriately (wrong parameters, wrong function for the task, etc.). | `example_question_sqls[]`, `sql_functions[]` | P1 |
-| `LLM_JUDGE_SYNTAX_ERROR` | SQL Examples | Genie's generated SQL contains syntax errors that prevent execution. *(Undocumented in official API docs; may be removed.)* | `example_question_sqls[]` | P2 |
 | `LLM_JUDGE_INCOMPLETE_OR_PARTIAL_OUTPUT` | SQL Examples | Genie's generated SQL returns only some of the requested data or columns, missing parts of what the ground truth SQL returns. | `example_question_sqls[]` | P2 |
 | `EMPTY_RESULT` | SQL Examples | Genie's generated SQL results were empty for this benchmark question. | `sql_snippets.filters[]`, `example_question_sqls[]` | P2 |
 | `RESULT_MISSING_ROWS` | SQL Examples | Genie's generated SQL response is missing rows from the provided ground truth SQL. | `example_question_sqls[]`, `sql_snippets.filters[]` | P2 |
 | `RESULT_EXTRA_ROWS` | SQL Examples | Genie's generated SQL response has more rows than the provided ground truth SQL. | `example_question_sqls[]`, `sql_snippets.filters[]` | P3 |
 | `LLM_JUDGE_FORMATTING_ERROR` | SQL Examples | Genie's generated SQL output has incorrect formatting, ordering (ORDER BY), or presentation issues that don't match expectations. | `example_question_sqls[]` | P3 |
-| `LLM_JUDGE_WRONG_FILTER` | Instructions | Genie's generated SQL has an incorrect WHERE clause with wrong values, operators, or column filtered. *(Undocumented in official API docs — narrower variant of MISSING_OR_INCORRECT_FILTER; may be removed.)* | `sql_snippets.filters[]`, `text_instructions[].content` | P1 |
 | `LLM_JUDGE_MISSING_OR_INCORRECT_FILTER` | Instructions | Genie's generated SQL is missing a WHERE clause condition or has incorrect filter logic that excludes/includes wrong data. | `sql_snippets.filters[]`, `text_instructions[].content` | P1 |
 | `LLM_JUDGE_MISINTERPRETATION_OF_USER_REQUEST` | Instructions | Genie's generated SQL fundamentally misunderstands what the user is asking for, addressing the wrong question or goal. | `text_instructions[].content`, `column_configs[].synonyms` | P1 |
 | `LLM_JUDGE_INSTRUCTION_COMPLIANCE_OR_MISSING_BUSINESS_LOGIC` | Instructions | Genie's generated SQL fails to apply specified instructions or business logic that should be followed. | `text_instructions[].content`, `sql_snippets.filters[]`, `sql_snippets.expressions[]` | P1 |
 | `LLM_JUDGE_INCORRECT_METRIC_CALCULATION` | Instructions | Genie's generated SQL uses incorrect logic or makes wrong assumptions when calculating metrics. | `sql_snippets.measures[]`, `text_instructions[].content` | P1 |
-| `LLM_JUDGE_SEMANTIC_ERROR` | Instructions | Genie's generated SQL is syntactically valid but logically wrong, producing incorrect results. *(Undocumented in official API docs; may be removed.)* | `text_instructions[].content`, `example_question_sqls[]` | P2 |
 | `SINGLE_CELL_DIFFERENCE` | Instructions | Single value result was produced but differs from ground truth result. | `text_instructions[].content`, `sql_snippets.expressions[]` | P3 |
 | `LLM_JUDGE_OTHER` | Instructions | LLM judge identified an error that doesn't fall into other categories. | Analyze SQL diff → map to closest label | P3 |
 | `EMPTY_GOOD_SQL` | Benchmark Quality | The benchmark SQL returned an empty result. | N/A — flag for benchmark review | — |
@@ -99,49 +93,6 @@ These errors indicate Genie selected wrong tables, columns, or joins — a schem
 | Improve table descriptions to clarify relationships | `data_sources.tables[].description` | Table Descriptions |
 
 **Diagnostic Signal:** Compare JOIN clauses in expected vs generated SQL. Identify which tables should be joined and on which keys.
-
----
-
-#### LLM_JUDGE_MISSING_JOIN
-
-**Category:** UC Metadata | **Priority:** P1
-**Description:** Genie's generated SQL is missing a required join between tables. *(Undocumented in official API docs — narrower variant of MISSING_OR_INCORRECT_JOIN; may be removed.)*
-
-**Primary Fixes:**
-
-| Fix Action | Config Path | Best Practice |
-|---|---|---|
-| Add join spec for the missing relationship | `instructions.join_specs[]` (all subfields) | Join Specs for Multi-Table Relationships |
-
-**Secondary Fixes:**
-
-| Fix Action | Config Path | Best Practice |
-|---|---|---|
-| Improve table descriptions to indicate how tables relate | `data_sources.tables[].description` | Table Descriptions |
-
-**Diagnostic Signal:** Expected SQL joins tables that the generated SQL queries independently or omits. Check if a join spec exists for this table pair.
-
----
-
-#### LLM_JUDGE_WRONG_COLUMNS
-
-**Category:** UC Metadata | **Priority:** P2
-**Description:** Genie's generated SQL selects wrong columns that don't match the ground truth SQL's intent. *(Undocumented in official API docs — overlaps with INCORRECT_TABLE_OR_FIELD_USAGE; may be removed.)*
-
-**Primary Fixes:**
-
-| Fix Action | Config Path | Best Practice |
-|---|---|---|
-| Improve column description for misused columns | `data_sources.tables[].column_configs[].description` | Column Descriptions |
-| Add synonyms if user terminology differs from column names | `data_sources.tables[].column_configs[].synonyms` | Column Synonyms |
-
-**Secondary Fixes:**
-
-| Fix Action | Config Path | Best Practice |
-|---|---|---|
-| Exclude noise columns that Genie shouldn't consider | `data_sources.tables[].column_configs[].exclude` | Irrelevant Columns Hidden |
-
-**Diagnostic Signal:** Compare SELECT lists — identify which columns were swapped, added, or omitted vs the expected SQL.
 
 ---
 
@@ -214,22 +165,6 @@ These errors indicate Genie selected wrong tables, columns, or joins — a schem
 
 These errors indicate Genie understood the schema but couldn't construct the right query pattern.
 
-#### LLM_JUDGE_WRONG_AGGREGATION
-
-**Category:** SQL Examples | **Priority:** P1
-**Description:** Genie's generated SQL uses the wrong aggregate function or GROUP BY clause. *(Undocumented in official API docs — narrower variant of MISSING_OR_INCORRECT_AGGREGATION; may be removed.)*
-
-**Primary Fixes:**
-
-| Fix Action | Config Path | Best Practice |
-|---|---|---|
-| Add example SQL demonstrating correct aggregation pattern | `instructions.example_question_sqls[].question`, `.sql`, `.usage_guidance` | At Least 1 Example SQL, Examples Cover Complex Patterns |
-| Add measure snippet for standard aggregations | `instructions.sql_snippets.measures[]` | Measure Snippets Defined |
-
-**Diagnostic Signal:** Compare GROUP BY and aggregate functions (SUM vs COUNT, etc.) in expected vs generated SQL.
-
----
-
 #### LLM_JUDGE_MISSING_OR_INCORRECT_AGGREGATION
 
 **Category:** SQL Examples | **Priority:** P1
@@ -259,27 +194,6 @@ These errors indicate Genie understood the schema but couldn't construct the rig
 | Register UC function with clear description | `instructions.sql_functions[].identifier`, `.description` | — |
 
 **Diagnostic Signal:** Compare function calls in expected vs generated SQL. Check if the function is a UDF that needs registration.
-
----
-
-#### LLM_JUDGE_SYNTAX_ERROR
-
-**Category:** SQL Examples | **Priority:** P2
-**Description:** Genie's generated SQL contains syntax errors that prevent execution. *(Undocumented in official API docs; may be removed.)*
-
-**Primary Fixes:**
-
-| Fix Action | Config Path | Best Practice |
-|---|---|---|
-| Add example SQL using correct dialect syntax | `instructions.example_question_sqls[]` | At Least 1 Example SQL |
-
-**Secondary Fixes:**
-
-| Fix Action | Config Path | Best Practice |
-|---|---|---|
-| Register UC function if syntax error involves a UDF | `instructions.sql_functions[]` | — |
-
-**Diagnostic Signal:** The generated SQL fails to execute. Identify the syntax error and whether it stems from dialect confusion or unrecognized functions.
 
 ---
 
@@ -391,29 +305,6 @@ These errors indicate Genie understood the schema but couldn't construct the rig
 
 These errors indicate Genie understood the schema and basic query patterns but misapplied business logic or misinterpreted the question.
 
-#### LLM_JUDGE_WRONG_FILTER
-
-**Category:** Instructions | **Priority:** P1
-**Description:** Genie's generated SQL has an incorrect WHERE clause with wrong values, operators, or column filtered. *(Undocumented in official API docs — narrower variant of MISSING_OR_INCORRECT_FILTER; may be removed.)*
-
-**Primary Fixes:**
-
-| Fix Action | Config Path | Best Practice |
-|---|---|---|
-| Add filter snippet for the correct pattern | `instructions.sql_snippets.filters[]` | Filter Snippets Defined |
-| Add text instruction explaining the business rule behind the filter | `instructions.text_instructions[].content` | At Least 1 Text Instruction, Business Jargon Mapped |
-
-**Secondary Fixes:**
-
-| Fix Action | Config Path | Best Practice |
-|---|---|---|
-| Enable entity matching on filter column | `data_sources.tables[].column_configs[].enable_entity_matching` | Value Dictionary Enabled |
-| Enable format assistance on filter column | `data_sources.tables[].column_configs[].enable_format_assistance` | Example Values Enabled |
-
-**Diagnostic Signal:** Compare WHERE clauses — identify the specific condition that differs. Check if the filter represents a business rule.
-
----
-
 #### LLM_JUDGE_MISSING_OR_INCORRECT_FILTER
 
 **Category:** Instructions | **Priority:** P1
@@ -499,28 +390,6 @@ These errors indicate Genie understood the schema and basic query patterns but m
 
 ---
 
-#### LLM_JUDGE_SEMANTIC_ERROR
-
-**Category:** Instructions | **Priority:** P2
-**Description:** Genie's generated SQL is syntactically valid but logically wrong, producing incorrect results. *(Undocumented in official API docs; may be removed.)*
-
-**Primary Fixes:**
-
-| Fix Action | Config Path | Best Practice |
-|---|---|---|
-| Add text instruction clarifying the correct interpretation | `instructions.text_instructions[].content` | At Least 1 Text Instruction |
-| Add example SQL demonstrating the correct logic | `instructions.example_question_sqls[]` | At Least 1 Example SQL, Examples Cover Complex Patterns |
-
-**Secondary Fixes:**
-
-| Fix Action | Config Path | Best Practice |
-|---|---|---|
-| Add filter, expression, or measure snippets as needed | `instructions.sql_snippets.*[]` | Various |
-
-**Diagnostic Signal:** Both SQLs execute successfully but produce different results. Analyze the logical difference — this often requires both text instructions and example SQLs.
-
----
-
 #### SINGLE_CELL_DIFFERENCE
 
 **Category:** Instructions | **Priority:** P3
@@ -583,7 +452,7 @@ These indicate problems with the benchmark itself, not with the space configurat
 **LLM Judge** (SQL-level semantic analysis — subjective):
 All `LLM_JUDGE_*` prefixed reasons.
 
-A single failed benchmark may have **both** deterministic and LLM judge reasons. Use both to triangulate the root cause. For example, `RESULT_MISSING_ROWS` + `LLM_JUDGE_WRONG_FILTER` together confirm a WHERE clause problem.
+A single failed benchmark may have **both** deterministic and LLM judge reasons. Use both to triangulate the root cause. For example, `RESULT_MISSING_ROWS` + `LLM_JUDGE_MISSING_OR_INCORRECT_FILTER` together confirm a WHERE clause problem.
 
 ### Multi-Reason Failures
 
@@ -603,7 +472,6 @@ Some labels can have root causes in multiple categories. Their primary category 
 | `EMPTY_RESULT` | SQL Examples | Instructions — if the root cause is a business-logic filter (e.g., wrong status value), add a `sql_snippets.filters[]` entry AND a `text_instructions` clarifying the filter rule |
 | `RESULT_MISSING_ROWS` | SQL Examples | Instructions — if rows are missing due to a too-restrictive business filter rather than wrong aggregation |
 | `RESULT_EXTRA_ROWS` | SQL Examples | Instructions — if extra rows appear due to a missing business-logic exclusion filter |
-| `LLM_JUDGE_SEMANTIC_ERROR` | Instructions | SQL Examples — often requires both `text_instructions` (clarify intent) AND `example_question_sqls` (demonstrate pattern) |
 
 **Decision rule:** If the result also has an LLM judge reason that clearly points to one category, follow that. If the deterministic reason stands alone, compare the WHERE clauses and GROUP BY to determine whether it's a filter issue (Instructions) or aggregation issue (SQL Examples).
 
@@ -615,20 +483,20 @@ Inverted lookup: for each config path, which labels can be fixed by modifying it
 
 | Config Path | Labels Addressable |
 |---|---|
-| `data_sources.tables[].description` | INCORRECT_TABLE_OR_FIELD_USAGE, MISSING_OR_INCORRECT_JOIN, MISSING_JOIN, RESULT_EXTRA_COLUMNS |
-| `data_sources.tables[].column_configs[].description` | INCORRECT_TABLE_OR_FIELD_USAGE, WRONG_COLUMNS, RESULT_MISSING_COLUMNS, RESULT_EXTRA_COLUMNS, COLUMN_TYPE_DIFFERENCE |
-| `data_sources.tables[].column_configs[].synonyms` | INCORRECT_TABLE_OR_FIELD_USAGE, WRONG_COLUMNS, RESULT_MISSING_COLUMNS, MISINTERPRETATION_OF_USER_REQUEST |
-| `data_sources.tables[].column_configs[].exclude` | WRONG_COLUMNS, RESULT_EXTRA_COLUMNS, RESULT_MISSING_COLUMNS (verify not excluded) |
-| `data_sources.tables[].column_configs[].enable_entity_matching` | WRONG_FILTER, MISSING_OR_INCORRECT_FILTER, EMPTY_RESULT |
-| `data_sources.tables[].column_configs[].enable_format_assistance` | WRONG_FILTER, MISSING_OR_INCORRECT_FILTER, EMPTY_RESULT |
+| `data_sources.tables[].description` | INCORRECT_TABLE_OR_FIELD_USAGE, MISSING_OR_INCORRECT_JOIN, RESULT_EXTRA_COLUMNS |
+| `data_sources.tables[].column_configs[].description` | INCORRECT_TABLE_OR_FIELD_USAGE, RESULT_MISSING_COLUMNS, RESULT_EXTRA_COLUMNS, COLUMN_TYPE_DIFFERENCE |
+| `data_sources.tables[].column_configs[].synonyms` | INCORRECT_TABLE_OR_FIELD_USAGE, RESULT_MISSING_COLUMNS, MISINTERPRETATION_OF_USER_REQUEST |
+| `data_sources.tables[].column_configs[].exclude` | RESULT_EXTRA_COLUMNS, RESULT_MISSING_COLUMNS (verify not excluded) |
+| `data_sources.tables[].column_configs[].enable_entity_matching` | MISSING_OR_INCORRECT_FILTER, EMPTY_RESULT |
+| `data_sources.tables[].column_configs[].enable_format_assistance` | MISSING_OR_INCORRECT_FILTER, EMPTY_RESULT |
 | `data_sources.metric_views[].description` | INCORRECT_TABLE_OR_FIELD_USAGE, INCORRECT_METRIC_CALCULATION |
-| `instructions.text_instructions[].content` | MISINTERPRETATION_OF_USER_REQUEST, INSTRUCTION_COMPLIANCE_OR_MISSING_BUSINESS_LOGIC, WRONG_FILTER, MISSING_OR_INCORRECT_FILTER, INCORRECT_METRIC_CALCULATION, SEMANTIC_ERROR, SINGLE_CELL_DIFFERENCE |
-| `instructions.example_question_sqls[]` | WRONG_AGGREGATION, MISSING_OR_INCORRECT_AGGREGATION, INCORRECT_FUNCTION_USAGE, SYNTAX_ERROR, INCOMPLETE_OR_PARTIAL_OUTPUT, FORMATTING_ERROR, EMPTY_RESULT, RESULT_MISSING_ROWS, RESULT_EXTRA_ROWS, SEMANTIC_ERROR, MISINTERPRETATION_OF_USER_REQUEST |
-| `instructions.join_specs[]` | MISSING_OR_INCORRECT_JOIN, MISSING_JOIN |
-| `instructions.sql_functions[]` | INCORRECT_FUNCTION_USAGE, SYNTAX_ERROR |
-| `instructions.sql_snippets.filters[]` | WRONG_FILTER, MISSING_OR_INCORRECT_FILTER, EMPTY_RESULT, RESULT_MISSING_ROWS, RESULT_EXTRA_ROWS, INSTRUCTION_COMPLIANCE_OR_MISSING_BUSINESS_LOGIC |
+| `instructions.text_instructions[].content` | MISINTERPRETATION_OF_USER_REQUEST, INSTRUCTION_COMPLIANCE_OR_MISSING_BUSINESS_LOGIC, MISSING_OR_INCORRECT_FILTER, INCORRECT_METRIC_CALCULATION, SINGLE_CELL_DIFFERENCE |
+| `instructions.example_question_sqls[]` | MISSING_OR_INCORRECT_AGGREGATION, INCORRECT_FUNCTION_USAGE, INCOMPLETE_OR_PARTIAL_OUTPUT, FORMATTING_ERROR, EMPTY_RESULT, RESULT_MISSING_ROWS, RESULT_EXTRA_ROWS, MISINTERPRETATION_OF_USER_REQUEST |
+| `instructions.join_specs[]` | MISSING_OR_INCORRECT_JOIN |
+| `instructions.sql_functions[]` | INCORRECT_FUNCTION_USAGE |
+| `instructions.sql_snippets.filters[]` | MISSING_OR_INCORRECT_FILTER, EMPTY_RESULT, RESULT_MISSING_ROWS, RESULT_EXTRA_ROWS, INSTRUCTION_COMPLIANCE_OR_MISSING_BUSINESS_LOGIC |
 | `instructions.sql_snippets.expressions[]` | INSTRUCTION_COMPLIANCE_OR_MISSING_BUSINESS_LOGIC, COLUMN_TYPE_DIFFERENCE, SINGLE_CELL_DIFFERENCE, INCORRECT_METRIC_CALCULATION |
-| `instructions.sql_snippets.measures[]` | WRONG_AGGREGATION, MISSING_OR_INCORRECT_AGGREGATION, INCORRECT_METRIC_CALCULATION, RESULT_MISSING_ROWS, RESULT_EXTRA_ROWS, SINGLE_CELL_DIFFERENCE |
+| `instructions.sql_snippets.measures[]` | MISSING_OR_INCORRECT_AGGREGATION, INCORRECT_METRIC_CALCULATION, RESULT_MISSING_ROWS, RESULT_EXTRA_ROWS, SINGLE_CELL_DIFFERENCE |
 
 **Config paths not mapped to any label** (correctly excluded from fix taxonomy):
 - `config.sample_questions` — UX only, does not affect SQL accuracy

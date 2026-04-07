@@ -103,7 +103,7 @@ Returns full details for a single benchmark result including generated SQL, expe
   "eval_run_status": "DONE",
   "assessment": "BAD",
   "assessment_reasons": [
-    "LLM_JUDGE_WRONG_FILTER",
+    "LLM_JUDGE_MISSING_OR_INCORRECT_FILTER",
     "RESULT_MISSING_ROWS"
   ],
   "manual_assessment": false,
@@ -164,15 +164,9 @@ Returns full details for a single benchmark result including generated SQL, expe
 
 | Reason | Description |
 |--------|-------------|
-| `LLM_JUDGE_MISSING_JOIN` | Missing a required join |
 | `LLM_JUDGE_MISSING_OR_INCORRECT_JOIN` | Join is missing or uses wrong condition |
-| `LLM_JUDGE_WRONG_FILTER` | Incorrect WHERE clause |
 | `LLM_JUDGE_MISSING_OR_INCORRECT_FILTER` | Filter is missing or wrong |
-| `LLM_JUDGE_WRONG_AGGREGATION` | Incorrect aggregate function |
 | `LLM_JUDGE_MISSING_OR_INCORRECT_AGGREGATION` | Aggregation is missing or wrong |
-| `LLM_JUDGE_WRONG_COLUMNS` | Wrong columns selected |
-| `LLM_JUDGE_SYNTAX_ERROR` | SQL syntax error |
-| `LLM_JUDGE_SEMANTIC_ERROR` | SQL is valid but logically wrong |
 | `LLM_JUDGE_INCOMPLETE_OR_PARTIAL_OUTPUT` | Returns only some requested data |
 | `LLM_JUDGE_MISINTERPRETATION_OF_USER_REQUEST` | Fundamentally misunderstands the question |
 | `LLM_JUDGE_INSTRUCTION_COMPLIANCE_OR_MISSING_BUSINESS_LOGIC` | Fails to apply business rules |
