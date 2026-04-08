@@ -6,3 +6,4 @@ package-lock.json
 *.swp
 /reports
 /test-skills/agent-architecture-*
+.vscode
