@@ -43,6 +43,10 @@ Read `scripts/fetch_space.py` for the implementation, then execute it:
   space_config
   ```
 
+**Databricks notebook notes:**
+- The script uses the REST API (`client.api_client.do()`) rather than the SDK's `genie.get_space()` — this works reliably across all SDK versions and compute types, including serverless.
+- On serverless compute, `client.config.token` is not directly accessible — `api_client.do()` handles authentication automatically, so avoid raw `requests.get()` calls.
+
 This outputs JSON with keys: `title`, `description`, `space_id`, `warehouse_id`, `workspace_host`, `serialized_space` (parsed dict).
 
 ### Step 2b: Save Raw Config
