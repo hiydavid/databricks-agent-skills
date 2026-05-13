@@ -18,7 +18,7 @@ Use this skill for iterative Databricks Genie space improvement in this repo. Ru
 - Never change underlying Databricks tables, table data, or schemas.
 - Do not change benchmark questions or benchmark answers as part of Genie tuning. Benchmark questions and answers may change only in a dedicated benchmark bootstrap or repair config version after the changes are documented and SQL answers are validated with read-only inspection.
 - Use only read-only Databricks SQL for inspection.
-- Use the DBSQL MCP for exploratory analysis that inspects Databricks tables, schemas, sample values, joins, or metric behavior.
+- Use the available Databricks SQL execution capability for exploratory analysis that inspects Databricks tables, schemas, sample values, joins, or metric behavior. In external coding agents, this is usually the DBSQL MCP; in Genie Code, use native DBSQL access.
 - Keep all Genie changes in versioned decoded `serialized_space` JSON files under `genie_configs/`.
 - Before creating or editing a new config version, write the intended changes in `fix_plan/genie_<version>_quality_improvement_plan.md`.
 - Do not copy benchmark questions or benchmark answer SQL into sample questions, SQL snippets, or example SQL.
@@ -29,14 +29,14 @@ Use this skill for iterative Databricks Genie space improvement in this repo. Ru
 - Before creating eval runs or pulling reports, read `references/evals-and-reports.md`.
 - Before analyzing failures or proposing changes, read `references/quality-tuning.md`.
 
-## Exploratory Analysis With DBSQL MCP
+## Exploratory Analysis With Databricks SQL
 
-When benchmark failure analysis requires live data or schema inspection, use the DBSQL MCP to run Databricks SQL exploratory queries before proposing config changes. Keep these queries read-only and bounded:
+When benchmark failure analysis requires live data or schema inspection, use the available Databricks SQL execution capability to run exploratory queries before proposing config changes. In external coding agents, this is usually the DBSQL MCP; in Genie Code, use native DBSQL access. Keep these queries read-only and bounded:
 
 - Allowed: `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, and `information_schema` queries.
 - Not allowed: DDL, DML, `CREATE`, `ALTER`, `DROP`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `COPY INTO`, or any table/schema/data mutation.
 - Prefer explicit `LIMIT`s for row samples and targeted aggregate checks for cardinality, null rates, categorical values, join grain, and metric definitions.
-- Use DBSQL MCP findings to support the fix plan, then make only serialized-space config edits under `genie_configs/`.
+- Use Databricks SQL findings to support the fix plan, then make only serialized-space config edits under `genie_configs/`.
 
 ## Workflow
 

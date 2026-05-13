@@ -106,7 +106,7 @@ Minimum benchmark bar:
 
 - Require at least 30 valid benchmark question/answer pairs. A pair is valid only when the question has exactly one SQL answer and there is no evidence that the answer SQL is invalid or errors during evaluation or read-only verification.
 - If fewer than 30 valid Q/A pairs remain, pause config tuning. Document the count, invalid or missing-answer question IDs, and the benchmark expansion or correction needed.
-- After documenting the gap, author enough benchmark Q/A additions or replacements to bring the reviewed valid set to at least 30. Use the available dataset, existing space config, and read-only DBSQL MCP inspection to ground the questions and SQL.
+- After documenting the gap, author enough benchmark Q/A additions or replacements to bring the reviewed valid set to at least 30. Use the available dataset, existing space config, and read-only Databricks SQL inspection to ground the questions and SQL.
 - Put the benchmark additions or replacements into a dedicated benchmark bootstrap or repair config version under `genie_configs/`. Do not combine this with Genie tuning changes.
 - Validate the benchmark config with `validate-config --previous-config <previous> --allow-benchmark-changes`, update the Genie space, run a full benchmark eval, and pull a versioned report before starting config tuning.
 
@@ -289,7 +289,7 @@ Fixes:
 1. Open the versioned report, for example `results/v1_benchmark_report.json`.
 2. Group failures by `assessment_reasons`.
 3. Compare `genie_response[].response` SQL to `expected_response[].response` SQL.
-4. When the failure cause depends on live schema or data semantics, use the DBSQL MCP for read-only exploratory SQL such as bounded samples, cardinality checks, null-rate checks, distinct categorical values, join-grain checks, and `information_schema` lookups.
+4. When the failure cause depends on live schema or data semantics, use the available Databricks SQL execution capability for read-only exploratory SQL such as bounded samples, cardinality checks, null-rate checks, distinct categorical values, join-grain checks, and `information_schema` lookups. In external coding agents, this is usually the DBSQL MCP; in Genie Code, use native DBSQL access.
 5. Label each failure with one primary cause:
    - wrong table/column
    - wrong filter value
