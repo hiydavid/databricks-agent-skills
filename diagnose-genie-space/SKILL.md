@@ -1,94 +1,185 @@
 ---
 name: genie-space-diagnostics
-description: 'Audit a Databricks Genie Space configuration against best practices and produce a prioritized remediation plan. Static analysis only — no queries are sent to Genie. Use when users want to: (1) evaluate a Genie Space against best practices, (2) audit space configuration quality, (3) get a checklist of improvements, (4) understand why Genie answers may be inaccurate, (5) review space setup before optimization or deployment. Triggers on: "diagnose genie space", "audit genie space", "genie space checklist", "review genie space", "genie best practices", "genie configuration audit", "genie setup review", "genie space health check", "why is genie giving wrong answers", "genie not working correctly".'
+description: "Diagnose Databricks Genie Space quality problems and produce a concrete tuning plan. Use when users ask why a Genie Space cannot answer a question consistently, gives wrong SQL, chooses wrong tables or columns, mishandles filters or joins, or needs a configuration health check before optimization. This skill is plan-only: it may fetch/read space configuration and perform bounded read-only SQL inspection, but it must not edit serialized_space, update a Genie Space, run benchmark evals, or mutate Databricks data."
 ---
 
 # Genie Space Diagnostics
 
-Audit a Databricks Genie Space configuration against best practices and produce a prioritized remediation plan. This is a **static analysis** — no queries are sent to Genie.
+Diagnose Genie Space quality problems and produce a concrete tuning plan. The default workflow is **question-level tuning triage**: start from a failing user question, gather evidence from the serialized space and read-only data inspection, classify the likely failure mode, and recommend the smallest useful Genie configuration change.
+
+This skill is plan-only. Do not edit local config files, patch Databricks, run benchmark evals, or change benchmark questions. If the user wants versioned edits, updates, eval runs, or accuracy comparison, hand off to `optimize-genie-space` after diagnosis.
 
 ## Prerequisites
 
 **Databricks notebooks / Assistant:**
-- The Databricks SDK is pre-installed and `WorkspaceClient()` authenticates automatically — no setup needed.
-- Always use notebook cells for code execution. Chat responses are only for questions, progress, and analysis.
+- The Databricks SDK is pre-installed and `WorkspaceClient()` authenticates automatically.
+- Always use notebook cells for code execution and SQL inspection. Chat responses are only for questions, progress, and analysis.
 
-**Claude Code (local):**
+**Claude Code / local coding agents:**
 1. **Databricks SDK** (v0.85+): `pip install "databricks-sdk>=0.85"`
-2. **Databricks CLI profile**: Must be configured (`databricks configure`) or have environment variables set (`DATABRICKS_HOST`, `DATABRICKS_TOKEN`).
+2. **Databricks CLI profile** or environment variables configured.
 
 **Both environments:**
-- **CAN EDIT permission** on the target Genie Space (required to read the serialized configuration).
+- **CAN EDIT permission** on the target Genie Space is required to read `serialized_space`.
+- Use only bounded read-only SQL inspection when live data evidence is needed.
 
 **Output behavior:**
-- Claude Code saves reports to `reports/<space_id>/` in the project root.
-- Databricks notebooks: create and run notebook cells for all code execution and result display. Do not run code only in the chat panel.
+- Local coding agents save reports to `reports/<space_id>/` in the project root.
+- Databricks notebooks render the report in notebook output with `displayHTML()` or printed markdown.
 
-## Step 1: Identify the Space ID
+## Step 1: Establish The Tuning Case
 
-Ask the user for the Genie Space ID. It's a 32-character hex string (e.g., `01ef8a1b2c3d4e5f6a7b8c9d0e1f2a3b`). Users can find it in the URL when viewing their Genie Space: `https://<workspace>.databricks.com/spaces/<space_id>`.
+Ask for any missing inputs that materially affect diagnosis:
+
+- Genie Space ID, a 32-character hex string from the space URL.
+- Failing question, exactly as the user asks it.
+- Observed bad behavior: wrong table, wrong column, wrong filter value, missing join, wrong metric, inconsistent answers, SQL error, empty answer, or unclear.
+- Actual generated SQL or error text, if available.
+- Expected answer, expected SQL, or business rule if available.
+- Whether the issue is intermittent or consistently reproducible.
+
+If the user only asks for a general audit, skip the question-level sections and run the static health-check workflow.
 
 ## Step 2: Fetch Space Configuration
 
-Read `scripts/fetch_space.py` for the implementation, then execute it:
+Read `scripts/fetch_space.py` for the implementation, then execute it.
 
-- **Claude Code**: Run via bash:
-  ```bash
-  python scripts/fetch_space.py <space_id>
-  ```
-- **Databricks notebook**: Read the script to understand the implementation. Then create a new notebook code cell containing the function definition and a call to it. Replace any `sys.exit()` calls with `raise` statements so the notebook kernel is not killed. Run the cell. Example cell structure:
-  ```python
-  # <paste fetch_space function definition here, replacing sys.exit(1) with raise>
-  space_config = fetch_space("<space_id>")
-  space_config
-  ```
+**Claude Code / local coding agents:**
 
-**Databricks notebook notes:**
-- The script uses the REST API (`client.api_client.do()`) rather than the SDK's `genie.get_space()` — this works reliably across all SDK versions and compute types, including serverless.
-- On serverless compute, `client.config.token` is not directly accessible — `api_client.do()` handles authentication automatically, so avoid raw `requests.get()` calls.
+```bash
+python scripts/fetch_space.py <space_id>
+```
 
-This outputs JSON with keys: `title`, `description`, `space_id`, `warehouse_id`, `workspace_host`, `serialized_space` (parsed dict).
+Save the JSON output to `reports/<space_id>/space-config.json`. The output has:
 
-### Step 2b: Save Raw Config
+- `title`
+- `description`
+- `space_id`
+- `warehouse_id`
+- `workspace_host`
+- `serialized_space` as a parsed object
 
-- **Claude Code**: Save the JSON output to `reports/<space_id>/space-config.json` (create the directory if needed). Inform the user the raw config has been saved.
-- **Databricks notebook**: No additional cell needed. The `space_config` variable from the previous cell is stored in the notebook kernel's memory and is available in subsequent cells.
+**Databricks notebook / Assistant:**
+- Read `scripts/fetch_space.py`.
+- Create a notebook code cell containing the function definition and call.
+- Replace `sys.exit()` calls with `raise` statements so the notebook kernel is not killed.
+- Keep the returned object in `space_config` for later cells.
 
-If the code fails:
-- **`ImportError`**: Prompt user to `pip install "databricks-sdk>=0.85"` (Claude Code only — SDK is pre-installed in Databricks)
-- **Auth failure**: Prompt user to run `databricks configure` or check environment variables (Claude Code only — Databricks notebooks auto-authenticate)
-- **Permission denied (`403` / `PERMISSION_DENIED`)**: User needs CAN EDIT on the space
-- **Not found (`404` / `NOT_FOUND`)**: Verify the space ID
+The script uses `client.api_client.do()` against `/api/2.0/genie/spaces/{space_id}?include_serialized_space=true`; avoid raw `requests.get()` because serverless auth tokens are not directly accessible.
 
-## Step 3: Run Diagnostics Audit
+If fetching fails:
+- `ImportError`: install `databricks-sdk>=0.85` for local agents.
+- Auth failure: configure the Databricks CLI profile or environment variables for local agents.
+- `403` / `PERMISSION_DENIED`: the user needs CAN EDIT on the space.
+- `404` / `NOT_FOUND`: verify the space ID.
 
-### Step 3a: Load Checklist
+## Step 3: Load References
 
-Read `references/best-practices-checklist.md` for the full evaluation criteria.
+Read only the references needed for the case:
 
-### Step 3b: Load Schema Reference (if needed)
+- `references/tuning-diagnosis.md` for failure classification and tuning-surface routing.
+- `references/best-practices-checklist.md` for supporting static health checks.
+- `references/space-schema.md` when field shapes, version-specific names, or validation rules matter.
 
-If you need to understand specific fields in the serialized space JSON, read `references/space-schema.md`.
+## Step 4: Inspect Evidence
 
-### Step 3c: Evaluate Each Checklist Item
+### 4a: Serialized Space Evidence
 
-For each item in the checklist, examine the fetched space configuration and determine:
+Use the fetched `serialized_space` to identify:
 
-- **Status**: `pass`, `fail`, `warning`, or `na`
-- **Explanation**: Why this assessment was made, referencing specific data from the space
-- **Fix** (for fail/warning only): A specific, actionable recommendation
+- candidate tables, columns, metric views, and descriptions related to the failing question
+- relevant synonyms, `enable_format_assistance`, and `enable_entity_matching` flags
+- existing join specs for tables implicated by the question
+- SQL snippets for reusable measures, filters, and expressions
+- example SQLs that might help or conflict with the question pattern
+- text instructions that define global conventions or contain overly specific logic
+- benchmark questions that cover similar intent, if any
 
-Be concrete — reference actual table names, column names, instruction text, and field values from the space. Don't give generic advice.
+Prefer concrete evidence: table names, column names, field values, instruction text, snippet names, and benchmark IDs.
 
-Examples of specific fixes:
-- "Add a description to column `unit_price` in table `catalog.schema.orders` — e.g., `'Unit price in USD for a single item'`"
-- "Add synonyms `['revenue', 'sales amount']` to column `total_sales` in table `catalog.schema.transactions`"
-- "Enable `enable_format_assistance: true` (v2) or `get_example_values: true` (v1) on column `region` in table `catalog.schema.stores` — this column appears filterable"
-- "Add a join spec between `catalog.schema.orders` and `catalog.schema.customers` on `orders.customer_id = customers.id`"
+### 4b: Read-Only SQL Inspection
 
-## Step 4: Generate Diagnostics Report
+Use the DBSQL MCP, Databricks SQL, or notebook SQL cells for read-only SQL only when the serialized config is insufficient to determine the likely cause. Keep inspection targeted and bounded.
 
-Present the diagnostics report in this format:
+Allowed SQL:
+
+- `SELECT`
+- `WITH`
+- `SHOW`
+- `DESCRIBE`
+- `EXPLAIN`
+- `information_schema` queries
+
+Not allowed:
+
+- `CREATE`, `ALTER`, `DROP`, `TRUNCATE`
+- `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `COPY INTO`
+- table/schema/data mutation of any kind
+
+Use read-only SQL for:
+
+- confirming candidate column names and data types
+- checking distinct categorical values and case/format mismatches
+- checking null rates, row counts, and cardinality
+- sampling a small number of rows with explicit `LIMIT`
+- validating join keys and join grain
+- understanding metric definitions when expected SQL or business rules are provided
+
+Record the SQL purpose and findings in the report. Do not include broad exploratory dumps.
+
+## Step 5: Classify The Failure
+
+Choose one primary failure class, plus secondary contributors if needed:
+
+- **Wrong table or column**: Genie selects a similarly named but incorrect source or omits a required field.
+- **Wrong filter value**: Genie uses a label, code, casing, date boundary, or categorical value that does not match stored data.
+- **Wrong join**: Genie misses a table, joins through the wrong key, or changes grain/cardinality.
+- **Metric or business logic error**: Genie calculates the wrong numerator, denominator, aggregation, ratio, or reusable business concept.
+- **Time logic error**: Genie uses the wrong period, boundary, date grain, fiscal convention, or rolling-window logic.
+- **Result shape error**: Genie returns the right concept with wrong columns, aliases, granularity, ranking, ordering, or limit.
+- **Instruction conflict or overload**: text instructions, examples, snippets, or benchmark SQL conflict or dilute the intended behavior.
+- **Insufficient benchmark coverage**: no benchmark or only weak benchmark coverage for the question pattern.
+- **Unknown from static evidence**: evidence is insufficient; state exactly what additional result SQL, expected SQL, or eval report is needed.
+
+## Step 6: Recommend Tuning Changes
+
+Recommend the smallest structured Genie configuration change that addresses the failure. Use this routing order:
+
+1. Table or column descriptions, synonyms, and hidden columns for table/column ambiguity.
+2. `enable_format_assistance` and `enable_entity_matching` for categorical value, formatting, or stored-value mismatch.
+3. `instructions.join_specs` for missing or incorrect joins.
+4. `instructions.sql_snippets` for reusable measures, filters, dimensions, and business expressions.
+5. `instructions.example_question_sqls` for representative complex patterns, multi-step logic, ranking, windows, or result shape.
+6. `instructions.text_instructions` only for concise global conventions that cannot be encoded structurally.
+
+Do not recommend copying the failing question or benchmark answer verbatim into example SQL. Example SQL should teach a representative pattern, not memorize a test.
+
+For every recommended change, include:
+
+- the target config surface
+- exact table, column, join, snippet, example, or instruction target
+- the proposed wording or JSON-level intent
+- why this is the smallest appropriate intervention
+- how the user should validate it after implementation
+
+## Step 7: Run Static Space Health Checks
+
+Use `references/best-practices-checklist.md` as supporting evidence after the question-level diagnosis. Evaluate the health checks most relevant to the failure first, then summarize broader issues:
+
+- data source scope and metadata
+- column descriptions, synonyms, format assistance, entity matching, and hidden noisy columns
+- text instruction focus
+- example SQL coverage and diversity
+- join specs and comments
+- SQL snippets for reusable filters, expressions, and measures
+- benchmark count, static answer shape, and pattern coverage
+- sample question quality
+
+Do not let a generic checklist item outrank a concrete finding about the failing question.
+
+## Step 8: Generate Diagnostics Report
+
+Present the report in this format:
 
 ```markdown
 # Genie Space Diagnostics: <space_title>
@@ -97,7 +188,38 @@ Present the diagnostics report in this format:
 **Date:** <YYYY-MM-DD>
 **Workspace:** `<workspace_host>`
 
-## Summary
+## Question-Level Tuning Diagnosis
+
+**Failing question:** <question>
+**Observed behavior:** <what the user reported>
+**Expected behavior:** <expected answer, SQL, or business rule; say "not provided" if absent>
+
+| Finding | Details |
+|---------|---------|
+| Primary failure class | ... |
+| Secondary contributors | ... |
+| Likely root cause | ... |
+| Confidence | High / Medium / Low |
+
+## Evidence From Serialized Space
+
+- ...
+
+## Read-Only Inspection Notes
+
+- SQL inspection performed: Yes / No
+- Findings: ...
+- Limitations: ...
+
+## Recommended Genie Tuning Changes
+
+Rank by expected impact on the failing question.
+
+| Priority | Config surface | Recommendation | Rationale | Validation |
+|----------|----------------|----------------|-----------|------------|
+| 1 | ... | ... | ... | ... |
+
+## Static Space Health Checks
 
 | Category | Pass | Fail | Warning | N/A |
 |----------|------|------|---------|-----|
@@ -107,80 +229,47 @@ Present the diagnostics report in this format:
 | Config | X | X | X | X |
 | **Total** | **X** | **X** | **X** | **X** |
 
-## Data Sources
+### Notable Static Findings
 
-| Item | Status | Explanation |
-|------|--------|-------------|
-| ... | ... | ... |
+| Item | Status | Explanation | Suggested fix |
+|------|--------|-------------|---------------|
+| ... | ... | ... | ... |
 
-Fixes:
-1. ...
-
-## Instructions
-
-| Item | Status | Explanation |
-|------|--------|-------------|
-| ... | ... | ... |
-
-Fixes:
-1. ...
-
-## Benchmarks
-
-| Item | Status | Explanation |
-|------|--------|-------------|
-| ... | ... | ... |
-
-Fixes:
-1. ...
-
-## Config
-
-| Item | Status | Explanation |
-|------|--------|-------------|
-| ... | ... | ... |
-
-Fixes:
-1. ...
-
-## Prioritized Remediation Plan
-
-Rank all fixes into three tiers, ordered by expected impact on Genie accuracy:
-
-### Critical (must fix)
-All items with `fail` status. These are the most likely causes of incorrect answers.
-1. ...
-
-### Recommended (should fix)
-Items with `warning` status that affect answer accuracy — descriptions, synonyms, example values, join specs, example SQLs.
-1. ...
-
-### Nice-to-Have
-Items with `warning` status that affect user experience but not accuracy — sample questions, instruction verbosity, usage guidance.
-1. ...
-
-## Optimizer Readiness Assessment
-
-Evaluate whether the space is ready for benchmark-driven optimization via `genie-space-optimizer`:
+## Optimizer Readiness
 
 | Criterion | Status | Details |
 |-----------|--------|---------|
 | Benchmarks exist | pass/fail | X benchmark questions found |
-| Benchmark count >= 10 | pass/fail/warning | X questions (minimum 10, recommended 20+) |
-| Benchmark diversity | pass/warning | Coverage across X of Y tables |
-| Critical failures resolved | pass/warning | X critical issues should be fixed first |
+| Benchmark count | pass/fail/warning | X questions; 30+ valid Q/A pairs recommended before benchmark-driven tuning |
+| Benchmark answer shape | pass/fail/warning | X questions have exactly one SQL answer |
+| Benchmark diversity | pass/warning | Coverage across tables, joins, metrics, filters, time logic, and result shapes |
+| Critical static failures resolved | pass/warning | X issues should be addressed before optimization |
 
 **Verdict:** Ready / Needs Work / Not Ready
 
-<If not ready, explain what needs to happen before running the optimizer.>
+## Handoff To Optimization
+
+- Recommended next skill: `optimize-genie-space` when the user is ready to make versioned config edits, update the space, run evals, and compare accuracy.
+- Suggested first optimization task: ...
 ```
 
-## Step 5: Save Report
+## Step 9: Save Report
 
-**Claude Code (local):**
-1. Create a `reports/<space_id>/` directory in the user's project root if it doesn't already exist.
-2. Save the full diagnostics markdown to `reports/<space_id>/diagnostics-report.md` in the project root.
-3. Inform the user of the saved file path.
+**Claude Code / local coding agents:**
+1. Create `reports/<space_id>/` in the user's project root if needed.
+2. Save the raw config to `reports/<space_id>/space-config.json`.
+3. Save the diagnostics markdown to `reports/<space_id>/diagnostics-report.md`.
+4. Tell the user the saved paths and the highest-impact recommended tuning change.
 
-**Databricks notebook:**
-Create a new notebook code cell that renders the diagnostics report as cell output using `displayHTML()` or by printing the markdown string. Do not display the report only in the chat panel.
+**Databricks notebook / Assistant:**
+- Create a notebook cell that renders the diagnostics report with `displayHTML()` or prints the markdown string.
+- Do not display the report only in chat.
+
+## Boundaries
+
+- Do not edit `serialized_space`.
+- Do not create candidate config versions.
+- Do not patch or update the Genie Space.
+- Do not run benchmark evals.
+- Do not change benchmark questions or benchmark answers.
+- Do not mutate Databricks tables, data, schemas, functions, or views.

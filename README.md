@@ -6,7 +6,7 @@ Skills that extend [Databricks Assistant](https://docs.databricks.com/aws/en/ass
 
 | Skill | Description |
 |-------|-------------|
-| **[diagnose-genie-space](./diagnose-genie-space/)** | Audit a Genie Space configuration against best practices and produce a prioritized remediation plan |
+| **[diagnose-genie-space](./diagnose-genie-space/)** | Diagnose failing Genie questions, inspect space context, and produce a concrete tuning plan |
 | **[optimize-genie-space](./optimize-genie-space/)** | Iteratively improve Genie Space quality by versioning configs, validating changes, running benchmark evals, and comparing accuracy |
 | **[multi-agent-architecture](./multi-agent-architecture/)** | Design multi-agent architectures for PoC/hackathon/MVP projects with Mermaid diagrams |
 | **[parse-documents](./parse-documents/)** | Build a Databricks document parsing and chunking pipeline for RAG ingestion |
@@ -73,7 +73,7 @@ The Assistant automatically discovers skills in agent mode. See the [Databricks 
 
 ```
 databricks-agent-skills/
-├── diagnose-genie-space/        # Static audit of Genie Space configuration
+├── diagnose-genie-space/        # Question-level diagnosis and tuning advice for Genie Spaces
 │   ├── SKILL.md
 │   ├── scripts/
 │   └── references/

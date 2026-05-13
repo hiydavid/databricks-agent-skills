@@ -336,7 +336,18 @@ Q&A pairs for validating Genie's SQL generation accuracy.
 | Rule | Details |
 |------|---------|
 | **IDs** | 32-char lowercase hexadecimal, no hyphens (e.g., `a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6`) |
-| **Sorting** | Collections with IDs or identifiers must be sorted alphabetically |
+| **Required top-level version** | `version` is required; new spaces should use `2` |
+| **Sorting** | Tables and metric views must be sorted by `identifier`; column configs by `column_name`; sample questions, text instructions, example SQLs, join specs, SQL snippets, and benchmarks by `id`; SQL functions by `(id, identifier)` |
 | **String length** | Maximum 25,000 characters per string |
 | **Array length** | Maximum 10,000 items per array |
 | **ID uniqueness** | Question IDs must be unique across `sample_questions` and `benchmarks.questions` |
+| **Instruction ID uniqueness** | IDs must be unique across text instructions, example SQLs, SQL functions, join specs, and all SQL snippet types |
+| **Column uniqueness** | `(table_identifier, column_name)` must be unique for column configs |
+| **Text instruction count** | At most one text instruction is allowed per space |
+| **Join spec shape** | `join_specs[].sql` must have exactly two elements: one equality condition and one valid relationship annotation |
+| **Join relationship annotations** | Valid values are `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_MANY--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_ONE--`, and `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_MANY--` |
+| **Benchmark answer shape** | Each benchmark question should have exactly one answer and that answer should use `format: "SQL"` |
+| **SQL snippet content** | SQL snippet `sql` fields cannot be empty |
+| **Benchmark leakage** | Do not copy benchmark questions or benchmark answer SQL verbatim into sample questions, SQL snippets, or example SQL |
+
+These checks diagnose whether a space is safe to hand off to `optimize-genie-space` for versioned edits and benchmark-driven tuning. Diagnosis should report violations, not fix them directly.
