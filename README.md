@@ -4,42 +4,56 @@ Skills that extend [Databricks Assistant](https://docs.databricks.com/aws/en/ass
 
 ## Skills
 
-| Skill | Slash Command | Description |
-|-------|---------------|-------------|
-| **[genie-space-diagnostics](./genie-space-diagnostics/)** | `/genie-space-diagnostics` | Audit Genie Space configuration against best practices with prioritized remediation plan |
-| **[genie-space-optimizer](./genie-space-optimizer/)** | `/genie-space-optimizer` | Benchmark-driven iterative optimization of Genie Space accuracy using the Benchmark API |
-| **[multi-agent-architecture](./multi-agent-architecture/)** | `/multi-agent-architecture` | Design multi-agent architectures for PoC/hackathon/MVP projects with Excalidraw diagrams |
-| **[parse-documents](./parse-documents/)** | — | Parse and chunk documents for ingestion |
+| Skill | Description |
+|-------|-------------|
+| **[diagnose-genie-space](./diagnose-genie-space/)** | Audit a Genie Space configuration against best practices and produce a prioritized remediation plan |
+| **[optimize-genie-space](./optimize-genie-space/)** | Iteratively improve Genie Space quality by versioning configs, validating changes, running benchmark evals, and comparing accuracy |
+| **[multi-agent-architecture](./multi-agent-architecture/)** | Design multi-agent architectures for PoC/hackathon/MVP projects with Mermaid diagrams |
+| **[parse-documents](./parse-documents/)** | Build a Databricks document parsing and chunking pipeline for RAG ingestion |
 
 ## Setup
 
 ### Claude Code
 
-Use `manage-skills.sh` to symlink skills into any project's `.claude/skills/` directory. Skills are auto-triggered by Claude when relevant to the conversation.
+Copy or symlink the desired skill folders into any project's `.claude/skills/` directory. Skills are auto-triggered by Claude when relevant to the conversation.
 
 ```bash
 git clone https://github.com/hiydavid/databricks-agent-skills.git
 cd databricks-agent-skills
 
-# List available skills
-./scripts/manage-skills.sh list
-
 # Add all skills to a project
-./scripts/manage-skills.sh add --all --to ~/my-project
+mkdir -p ~/my-project/.claude/skills
+for skill in diagnose-genie-space optimize-genie-space multi-agent-architecture parse-documents; do
+  ln -s "$PWD/$skill" ~/my-project/.claude/skills/$skill
+done
 
 # Add a single skill
-./scripts/manage-skills.sh add multi-agent-architecture --to ~/my-project
-
-# Check what's installed
-./scripts/manage-skills.sh status --in ~/my-project
-
-# Remove a skill
-./scripts/manage-skills.sh remove multi-agent-architecture --from ~/my-project
+ln -s "$PWD/diagnose-genie-space" ~/my-project/.claude/skills/diagnose-genie-space
 ```
 
-If `--to`/`--from`/`--in` is omitted, it defaults to the current working directory.
+If you prefer copying instead of symlinking, use `cp -R <skill> ~/my-project/.claude/skills/`.
 
-### Databricks Assistant
+### Codex
+
+Copy or symlink the desired skill folders into your Codex skills directory:
+
+```bash
+git clone https://github.com/hiydavid/databricks-agent-skills.git
+cd databricks-agent-skills
+
+# Add all skills
+mkdir -p ~/.codex/skills
+for skill in diagnose-genie-space optimize-genie-space multi-agent-architecture parse-documents; do
+  ln -s "$PWD/$skill" ~/.codex/skills/$skill
+done
+
+# Add a single skill
+ln -s "$PWD/diagnose-genie-space" ~/.codex/skills/diagnose-genie-space
+```
+
+If you prefer copying instead of symlinking, use `cp -R <skill> ~/.codex/skills/`.
+
+### Databricks Genie Code
 
 Copy the desired skill folder into your workspace skills directory:
 
@@ -59,11 +73,11 @@ The Assistant automatically discovers skills in agent mode. See the [Databricks 
 
 ```
 databricks-agent-skills/
-├── genie-space-diagnostics/     # Static audit of Genie Space configuration
+├── diagnose-genie-space/        # Static audit of Genie Space configuration
 │   ├── SKILL.md
 │   ├── scripts/
 │   └── references/
-├── genie-space-optimizer/       # Benchmark-driven iterative optimization
+├── optimize-genie-space/        # Benchmark-driven iterative optimization
 │   ├── SKILL.md
 │   ├── scripts/
 │   └── references/
@@ -74,21 +88,23 @@ databricks-agent-skills/
 │   └── mermaid-to-excalidraw.mjs
 ├── test-skills/                 # Test scenarios for validating skills
 │   └── equity-analysis.md
+├── genai_hackathon_starter_guide.md
+├── package.json
 └── README.md
 ```
 
 ### Adding a new skill
 
 1. Create the skill folder: `mkdir -p my-skill`
-2. Add `my-skill/SKILL.md` with instructions and references
-3. Add a slash command: create `commands/my-skill.md` with frontmatter (`description`, `argument-hint`) that loads the SKILL.md
-4. Install and test: `./scripts/manage-skills.sh add my-skill --to ~/my-project`
+2. Add `my-skill/SKILL.md` with frontmatter (`name`, `description`) and workflow instructions
+3. Add any supporting files under `my-skill/references/` or `my-skill/scripts/`
+4. Install and test by copying or symlinking `my-skill/` into a project's `.claude/skills/` directory
 
 ### Testing skills
 
-1. Add skills to a test project: `./scripts/manage-skills.sh add --all --to ~/my-project`
+1. Add the skill to a test project by copying or symlinking its folder into `.claude/skills/`
 2. Start a new Claude Code session in that project
-3. Invoke via slash command (e.g., `/multi-agent-architecture`) or trigger naturally
+3. Trigger the skill naturally with a representative user request
 4. Edit the skill files, start a new session, and re-test (symlinks pick up changes automatically)
 
 ### Contributing
