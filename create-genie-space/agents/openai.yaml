@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Genie Space"
+  short_description: "Create validated Databricks Genie spaces"
+  default_prompt: "Use $create-genie-space to create a Databricks Genie Space JSON for my Unity Catalog tables."
