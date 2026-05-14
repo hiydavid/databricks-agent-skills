@@ -43,7 +43,7 @@ Space-level configuration.
 
 ## `data_sources`
 
-Tables, columns, and metric views available to Genie.
+Tables, standard views, columns, and Metric Views available to Genie.
 
 ### Tables
 
@@ -85,9 +85,9 @@ Tables, columns, and metric views available to Genie.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `tables` | array | Unity Catalog tables exposed to Genie |
+| `tables` | array | Unity Catalog tables or standard views exposed to Genie |
 | `tables[].id` | string | 32-char lowercase hex identifier |
-| `tables[].identifier` | string | Fully qualified table name (`catalog.schema.table`) |
+| `tables[].identifier` | string | Fully qualified table or view name (`catalog.schema.object`) |
 | `tables[].description` | array of strings | Human-readable description of the table |
 | `tables[].column_configs` | array | Column definitions with metadata |
 | `tables[].column_configs[].id` | string | 32-char lowercase hex identifier |
@@ -99,10 +99,10 @@ Tables, columns, and metric views available to Genie.
 | `tables[].column_configs[].exclude` | boolean | Whether to hide this column from Genie |
 | `tables[].column_configs[].enable_entity_matching` | boolean | (v2 only — replaces `build_value_dictionary`) Whether Genie matches user terms to column values |
 | `tables[].column_configs[].enable_format_assistance` | boolean | (v2 only — replaces `get_example_values`) Whether Genie applies format hints for this column |
-| `metric_views` | array | Pre-computed metric views |
+| `metric_views` | array | Existing Databricks Metric Views exposed to Genie. Metric View-only spaces can leave `tables` empty. |
 | `metric_views[].id` | string | 32-char lowercase hex identifier |
-| `metric_views[].identifier` | string | Fully qualified metric view name |
-| `metric_views[].description` | array of strings | What the metric view computes |
+| `metric_views[].identifier` | string | Fully qualified Metric View name (`catalog.schema.metric_view`) |
+| `metric_views[].description` | array of strings | What the Metric View computes, including key measures, dimensions, and business scope |
 
 > **Version Note:** Spaces with `"version": 2` reject v1 fields (`get_example_values`, `build_value_dictionary`). Use their v2 equivalents (`enable_format_assistance`, `enable_entity_matching`) instead. Including v1 fields in a v2 space config will cause API errors.
 
@@ -200,11 +200,11 @@ Guidance that shapes how Genie interprets questions and generates SQL.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `join_specs` | array | Explicit join definitions for multi-table queries |
+| `join_specs` | array | Explicit join definitions for multi-table or table-view queries |
 | `join_specs[].id` | string | 32-char lowercase hex identifier |
-| `join_specs[].left.identifier` | string | Left table fully qualified name |
+| `join_specs[].left.identifier` | string | Left table/view fully qualified name |
 | `join_specs[].left.alias` | string | Alias for the left table in the join |
-| `join_specs[].right.identifier` | string | Right table fully qualified name |
+| `join_specs[].right.identifier` | string | Right table/view fully qualified name |
 | `join_specs[].right.alias` | string | Alias for the right table in the join |
 | `join_specs[].sql` | array of 2 strings | `[equality_expression, relationship_type_annotation]`. First element: a single equality expression (e.g., `"t1.col = t2.col"`) — no `AND`/`OR`. Second element: one of `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_MANY--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_ONE--`, `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_MANY--`. |
 | `join_specs[].comment` | array of strings | Business context for the relationship |
@@ -337,17 +337,20 @@ Q&A pairs for validating Genie's SQL generation accuracy.
 |------|---------|
 | **IDs** | 32-char lowercase hexadecimal, no hyphens (e.g., `a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6`) |
 | **Required top-level version** | `version` is required; new spaces should use `2` |
+| **Required data source** | At least one table, standard view, or Metric View must be present across `data_sources.tables` and `data_sources.metric_views` |
+| **Data source count** | Keep total attached tables, standard views, and Metric Views at or below the current Genie limit of 30 |
 | **Sorting** | Tables and metric views must be sorted by `identifier`; column configs by `column_name`; sample questions, text instructions, example SQLs, join specs, SQL snippets, and benchmarks by `id`; SQL functions by `(id, identifier)` |
 | **String length** | Maximum 25,000 characters per string |
 | **Array length** | Maximum 10,000 items per array |
 | **ID uniqueness** | Question IDs must be unique across `sample_questions` and `benchmarks.questions` |
 | **Instruction ID uniqueness** | IDs must be unique across text instructions, example SQLs, SQL functions, join specs, and all SQL snippet types |
-| **Column uniqueness** | `(table_identifier, column_name)` must be unique for column configs |
+| **Column uniqueness** | `(table_or_view_identifier, column_name)` must be unique for column configs |
 | **Text instruction count** | At most one text instruction is allowed per space |
 | **Join spec shape** | `join_specs[].sql` must have exactly two elements: one equality condition and one valid relationship annotation |
 | **Join relationship annotations** | Valid values are `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_MANY--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_ONE--`, and `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_MANY--` |
 | **Benchmark answer shape** | Each benchmark question should have exactly one answer and that answer should use `format: "SQL"` |
 | **SQL snippet content** | SQL snippet `sql` fields cannot be empty |
 | **Benchmark leakage** | Do not copy benchmark questions or benchmark answer SQL verbatim into sample questions, SQL snippets, or example SQL |
+| **Metric View SQL** | Example SQLs and benchmark answers that query Metric Views should use explicit dimensions and `MEASURE(<measure_name>)`; do not use `SELECT *` against Metric Views |
 
 These checks determine whether a newly authored space JSON is safe to validate, package, and optionally hand off to `optimize-genie-space` for benchmark-driven tuning.

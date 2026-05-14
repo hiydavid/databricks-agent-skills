@@ -1,6 +1,6 @@
 # Genie Space Static Health Checklist
 
-Use this checklist as an authoring and review rubric for a newly generated Genie Space JSON. Start with items relevant to the selected tables and intended use cases, then summarize broader health issues.
+Use this checklist as an authoring and review rubric for a newly generated Genie Space JSON. Start with items relevant to the selected tables, views, Metric Views, and intended use cases, then summarize broader health issues.
 
 This checklist is a quality rubric. `creation-workflow.md` is the authority for the creation sequence and for deciding which Genie configuration surface should represent a concept.
 
@@ -10,17 +10,18 @@ Evaluate each item against the serialized space JSON. For each item, determine:
 - **warning**: Partially meets — improvement recommended
 - **na**: Not applicable to this space's configuration
 
-Provide a brief explanation for each assessment and, for any fail/warning, give a specific actionable fix referencing actual table names, column names, or instruction text from the space.
+Provide a brief explanation for each assessment and, for any fail/warning, give a specific actionable fix referencing actual data source names, table names, column names, Metric View names, or instruction text from the space.
 
 When recommending fixes, route them to the most structured Genie config surface that can represent the behavior:
 
-1. table/column metadata and synonyms
-2. format assistance and entity matching for categorical values
-3. join specs
-4. SQL snippets for reusable filters, expressions, and measures
-5. representative example SQL for complex patterns
-6. SQL functions for trusted complex logic that cannot be captured with SQL expressions or static/parameterized examples
-7. text instructions only for concise global conventions
+1. Metric View semantic metadata when a selected Metric View already owns the business metric
+2. table/column metadata and synonyms
+3. format assistance and entity matching for categorical values
+4. join specs for table/table or table/view relationships
+5. SQL snippets for reusable filters, expressions, and measures not already captured by Metric Views
+6. representative example SQL for complex patterns, including valid Metric View `MEASURE()` queries
+7. SQL functions for trusted complex logic that cannot be captured with SQL expressions or static/parameterized examples
+8. text instructions only for concise global conventions
 
 **Version detection:** First check `serialized_space.version`. If `2`, use v2 field names (`enable_format_assistance`, `enable_entity_matching`). If `1`, use v1 field names (`get_example_values`, `build_value_dictionary`). Do not mix v1 and v2 fields — v2 spaces reject v1 fields and vice versa.
 
@@ -28,13 +29,20 @@ When recommending fixes, route them to the most structured Genie config surface 
 
 ## Data Sources
 
-### Tables
+### Data Source Scope
 
-**Table Count (1–25, ideally ≤5 initially)**
-- Check: `serialized_space.data_sources.tables` array length
-- Why: Too many tables increases ambiguity and response latency. Start small and expand as needed.
-- Fail if: 0 tables or >25 tables
-- Warning if: >10 tables
+**Data Object Count (1-30, ideally ≤5 initially)**
+- Check: `serialized_space.data_sources.tables` plus `serialized_space.data_sources.metric_views`
+- Why: Too many data objects increase ambiguity and response latency. Start small and expand as needed. Databricks currently supports up to 30 tables or views in a Genie Space, and Metric Views are the preferred simplification layer when metrics/dimensions are already modeled.
+- Fail if: No tables, views, or Metric Views are configured, or total data objects exceed 30
+- Warning if: Total data objects exceed 10
+
+**Focused Data Object Selection**
+- Check: Whether tables, views, and Metric Views appear relevant to the space's stated purpose (`title`, `description`)
+- Why: Including unnecessary data objects adds noise and confuses Genie's source selection.
+- Warning if: Data objects seem unrelated to the space's purpose
+
+### Tables And Standard Views
 
 **Table Descriptions**
 - Check: Each table in `data_sources.tables[].description`
@@ -43,10 +51,7 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Good: `"description": "Daily sales transactions with line-item details, one row per product per order"`
 - Bad: `"description": ""` or `"description": "sales table"`
 
-**Focused Table Selection**
-- Check: Whether tables appear relevant to the space's stated purpose (`title`, `description`)
-- Why: Including unnecessary tables adds noise and confuses Genie's table selection.
-- Warning if: Tables seem unrelated to the space's purpose
+- NA if: No tables or standard views are configured
 
 ### Columns
 
@@ -81,6 +86,7 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Check: `data_sources.tables[].column_configs[].exclude` — columns with `exclude: true` are hidden from Genie
 - Why: Extra columns increase ambiguity. Hide columns users won't query by setting `exclude: true`.
 - Warning if: Columns like internal IDs, audit timestamps, or ETL metadata have `exclude: false` or no `exclude` field
+- NA if: No tables or standard views are configured
 
 ### Metric Views
 
@@ -89,6 +95,25 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Why: Metric views surface pre-computed metrics. Without descriptions, Genie can't match questions to the right metric.
 - Fail if: Metric views exist but lack descriptions
 - NA if: No metric views are defined
+
+**Metric View Semantic Metadata**
+- Check: Metric View definition from `DESCRIBE TABLE EXTENDED <catalog.schema.metric_view> AS JSON`, especially display names, synonyms, and format metadata for key dimensions and measures
+- Why: Databricks Metric View agent metadata helps Genie understand business terminology and formatting for dimensions and measures.
+- Warning if: Key dimensions or measures lack display names or synonyms and users are likely to use business terms that differ from the technical names
+- NA if: No Metric Views are defined, or the user does not have permission to inspect the Metric View definition
+
+**Metric View Query Syntax**
+- Check: Example SQLs and benchmark answers that query Metric Views
+- Why: Metric View measures must be evaluated with `MEASURE()` and should not be queried with `SELECT *`.
+- Fail if: Metric View examples or benchmarks select measures without `MEASURE()` or use `SELECT *`
+- Warning if: Metric View examples omit representative dimensions or grouping
+- NA if: No Metric View examples or benchmarks are present
+
+**Metric View Mixed-Source Joins**
+- Check: Mixed Metric View plus table/view example SQLs
+- Why: Metric Views cannot be directly joined to other tables at query time. Query the Metric View in a CTE, then join the CTE result to tables/views.
+- Fail if: Example SQLs or benchmark answers directly join a Metric View to another table/view
+- NA if: The space is Metric View-only or has no mixed-source examples
 
 ---
 
@@ -108,7 +133,7 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Warning if: Instructions are excessively long (>500 words total) or contain embedded SQL
 
 **Business Jargon Mapped**
-- Check: Whether domain-specific terms are mapped in table/column descriptions, synonyms, SQL snippets, example SQLs, SQL functions, or global text instructions
+- Check: Whether domain-specific terms are mapped in Metric View agent metadata, table/column descriptions, synonyms, SQL snippets, example SQLs, SQL functions, or global text instructions
 - Why: If users say "churn rate" but the data uses "customer_attrition_pct", Genie needs that mapping in the most structured surface that fits the concept.
 - Warning if: The space uses specialized terminology without definitions
 
@@ -119,7 +144,7 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Why: Example SQLs teach Genie common prompt formats and complex query patterns it cannot infer from schema, metadata, joins, or reusable SQL snippets alone.
 - Fail if: An intended use case or benchmark evidence shows a complex/common organization-specific question pattern that lacks a representative example or SQL function
 - Warning if: The space likely has complex/common question patterns but no representative examples
-- NA if: The space only supports simple table/column lookup or aggregation patterns that are already covered by metadata, joins, and SQL snippets
+- NA if: The space only supports simple table/column lookup or Metric View measure/dimension patterns that are already covered by metadata, joins, Metric View semantics, and SQL snippets
 
 **Examples Cover Complex Patterns**
 - Check: Whether example SQLs include multi-table joins, window functions, CTEs, or business logic
@@ -127,7 +152,7 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Warning if: All examples are simple single-table queries
 
 **Examples Are Diverse**
-- Check: Whether example SQLs cover different question types and tables
+- Check: Whether example SQLs cover different question types and data objects
 - Why: Redundant examples waste context. Each should teach a distinct pattern.
 - Warning if: Multiple examples use nearly identical patterns
 
@@ -149,12 +174,13 @@ When recommending fixes, route them to the most structured Genie config surface 
 
 ### Join Specs
 
-**Join Specs for Multi-Table Relationships**
+**Join Specs for Multi-Table/Table-View Relationships**
 - Check: `serialized_space.instructions.join_specs` array
-- Why: Without explicit join specs, Genie may guess wrong join conditions, especially for self-joins or non-obvious foreign keys.
-- Warning if: Multiple tables exist but no join specs are defined
-- NA if: Only 1 table is configured
+- Why: Without explicit join specs, Genie may guess wrong join conditions for table/table or table/view joins, especially for self-joins or non-obvious foreign keys.
+- Warning if: Multiple tables/views exist but no join specs are defined
+- NA if: Only 1 table/view is configured, or the space is Metric View-only
 - Note: In serialized-space configs, multiple join specs between the same table pair is the safe pattern for multi-column joins. Keep each serialized join spec `sql` element to a single equality expression and add `comment` and `instruction` fields to related specs so they are used together. In the Databricks UI, more complicated join conditions can be captured with SQL expressions.
+- Note: For mixed Metric View plus table/view query examples, prefer a CTE pattern over direct Metric View join specs unless Databricks serialized-space behavior is known to support the exact join.
 
 **Join Specs Have Comments**
 - Check: `instructions.join_specs[].comment`
@@ -176,7 +202,7 @@ When recommending fixes, route them to the most structured Genie config surface 
 **Measure Snippets Defined**
 - Check: `serialized_space.instructions.sql_snippets.measures` array
 - Why: Measures define standard aggregations (revenue, count, average) that should be computed consistently.
-- Warning if: Recurring KPIs, ratios, denominators, numerators, or named aggregations are expected but not represented as measures
+- Warning if: Recurring KPIs, ratios, denominators, numerators, or named aggregations are expected but not represented as measures or as Metric View measures
 
 ---
 
@@ -191,7 +217,7 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Note: Static review can check answer shape and coverage, but it cannot prove expected SQL correctness unless the user provides read-only validation evidence
 
 **Benchmark Coverage**
-- Check: Whether benchmarks cover different tables, join patterns, aggregations, and filter types
+- Check: Whether benchmarks cover different data objects, Metric View dimensions/measures, join patterns, aggregations, and filter types
 - Why: Narrow benchmarks miss entire categories of user questions.
 - Warning if: Benchmarks only test one type of query pattern
 
@@ -222,7 +248,8 @@ When generating the prioritized remediation plan, assign each fix to a tier:
 
 ### Critical (must fix) — `fail` items related to intended use cases
 These are likely to cause incorrect answers. Fix before live creation or optimizer handoff.
-- Missing table/column descriptions → wrong table/column selection
+- Missing Metric View descriptions or table/column descriptions → wrong data object or column selection
+- Invalid Metric View example SQL or benchmark SQL → generated SQL can fail or teach the wrong pattern
 - Missing representative examples/functions for a reported complex pattern → Genie can't learn or trust that pattern
 - Missing global text instructions for a relevant global convention → inconsistent interpretation across prompts
 - Missing parameter descriptions → incorrect parameterized queries
@@ -230,9 +257,10 @@ These are likely to cause incorrect answers. Fix before live creation or optimiz
 
 ### Recommended (should fix) — `warning` items affecting accuracy
 These reduce answer quality. Fix before or during optimization.
-- Missing column synonyms → user terminology not mapped
+- Missing Metric View agent metadata or column synonyms → user terminology not mapped
 - Prompt matching not enabled on eligible categorical/filter columns → wrong filter values
-- Missing join specs (multi-table spaces) → wrong or missing joins
+- Missing join specs (multi-table/table-view spaces) → wrong or missing joins
+- Missing CTE examples for mixed Metric View plus table/view questions → invalid direct joins
 - Fewer than 30 diverse benchmark Q&A pairs → weak baseline for optimization
 - Missing SQL snippets for reusable business logic implicated by questions or benchmarks → inconsistent aggregations/filters
 - Irrelevant columns not hidden → increased ambiguity

@@ -21,6 +21,7 @@ VALID_JOIN_RELATIONSHIPS = {
 }
 V1_COLUMN_FIELDS = {"get_example_values", "build_value_dictionary"}
 V2_COLUMN_FIELDS = {"enable_format_assistance", "enable_entity_matching"}
+MAX_DATA_SOURCES = 30
 
 
 class ValidationError(Exception):
@@ -157,6 +158,20 @@ def instruction_objects(instructions: dict[str, Any]) -> list[dict[str, Any]]:
     return objects
 
 
+def sql_texts_with_label(instructions: dict[str, Any], config: dict[str, Any]) -> list[tuple[str, str]]:
+    texts: list[tuple[str, str]] = []
+    for index, example in enumerate(as_list(instructions.get("example_question_sqls"))):
+        sql_text = joined_text(as_dict(example).get("sql")).strip()
+        if sql_text:
+            texts.append((f"$.instructions.example_question_sqls[{index}].sql", sql_text))
+    for index, question in enumerate(as_list(as_dict(config.get("benchmarks")).get("questions"))):
+        for answer_index, answer in enumerate(as_list(as_dict(question).get("answer"))):
+            sql_text = joined_text(as_dict(answer).get("content")).strip()
+            if sql_text:
+                texts.append((f"$.benchmarks.questions[{index}].answer[{answer_index}].content", sql_text))
+    return texts
+
+
 def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -181,12 +196,16 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
 
     tables = as_list(data_sources.get("tables"))
     metric_views = as_list(data_sources.get("metric_views"))
+    total_data_sources = len(tables) + len(metric_views)
     if not tables and not metric_views:
         errors.append("$.data_sources.tables or $.data_sources.metric_views must include at least one data source")
-    if len(tables) > 25:
-        errors.append("$.data_sources.tables should not contain more than 25 tables")
-    elif len(tables) > 10:
-        warnings.append("$.data_sources.tables has more than 10 tables; start with a smaller focused scope if possible")
+    if total_data_sources > MAX_DATA_SOURCES:
+        errors.append(
+            "$.data_sources should not contain more than "
+            f"{MAX_DATA_SOURCES} total tables, views, and Metric Views"
+        )
+    elif total_data_sources > 10:
+        warnings.append("$.data_sources has more than 10 data objects; start with a smaller focused scope if possible")
 
     check_sorted(errors, "$.data_sources.tables", tables, lambda item: as_dict(item).get("identifier", ""))
     check_sorted(
@@ -203,14 +222,17 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
             require_id(errors, label, source)
             identifier = source_obj.get("identifier")
             if not isinstance(identifier, str) or len(identifier.split(".")) != 3:
-                errors.append(f"{label}.identifier must use catalog.schema.table")
+                errors.append(f"{label}.identifier must use catalog.schema.object")
             if collection_name == "tables":
                 desc = joined_text(source_obj.get("description")).strip()
                 check_string_array(warnings, f"{label}.description", source_obj.get("description"))
                 if not desc or desc.lower() in {"table", str(identifier).split(".")[-1].lower()}:
                     warnings.append(f"{label}.description should explain table grain and business purpose")
-            elif not joined_text(source_obj.get("description")).strip():
-                warnings.append(f"{label}.description should explain the metric view")
+            else:
+                desc = joined_text(source_obj.get("description")).strip()
+                check_string_array(warnings, f"{label}.description", source_obj.get("description"))
+                if not desc or desc.lower() in {"metric view", str(identifier).split(".")[-1].lower()}:
+                    warnings.append(f"{label}.description should explain Metric View measures, dimensions, and scope")
 
             column_configs = as_list(source_obj.get("column_configs"))
             if collection_name == "tables" and not column_configs:
@@ -314,7 +336,7 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
             warnings.append(f"$.instructions.text_instructions[{index}] appears to contain SQL; prefer snippets or examples")
 
     if len(tables) > 1 and not join_specs:
-        warnings.append("multiple tables are configured but $.instructions.join_specs is empty")
+        warnings.append("multiple tables/views are configured but $.instructions.join_specs is empty")
 
     for index, join in enumerate(join_specs):
         label = f"$.instructions.join_specs[{index}]"
@@ -368,6 +390,36 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
     for question_id, kind, benchmark_text in benchmark_texts:
         if benchmark_text and benchmark_text in example_text:
             errors.append(f"$.instructions.example_question_sqls appears to copy benchmark {kind} from {question_id}")
+
+    metric_identifiers = [
+        as_dict(metric_view).get("identifier")
+        for metric_view in metric_views
+        if isinstance(as_dict(metric_view).get("identifier"), str)
+    ]
+    metric_names = [(identifier, identifier.split(".")[-1]) for identifier in metric_identifiers]
+    for label, sql_text in sql_texts_with_label(instructions, config):
+        lowered = sql_text.lower()
+        for identifier, name in metric_names:
+            identifier_l = identifier.lower()
+            name_l = name.lower()
+            mentions_metric_view = identifier_l in lowered or re.search(rf"\b{re.escape(name_l)}\b", lowered)
+            if not mentions_metric_view:
+                continue
+            if re.search(r"\bselect\s+\*", lowered):
+                errors.append(f"{label} appears to use SELECT * against Metric View {identifier}")
+            if "measure(" not in lowered:
+                warnings.append(f"{label} mentions Metric View {identifier} but does not use MEASURE()")
+            direct_join_pattern = (
+                rf"\bfrom\s+`?{re.escape(identifier_l)}`?(?:(?!\)).)*?\bjoin\b"
+                rf"|\bjoin\s+`?{re.escape(identifier_l)}`?\b"
+                rf"|\bfrom\s+`?{re.escape(name_l)}`?(?:(?!\)).)*?\bjoin\b"
+                rf"|\bjoin\s+`?{re.escape(name_l)}`?\b"
+            )
+            if re.search(direct_join_pattern, lowered, re.S):
+                warnings.append(
+                    f"{label} appears to join Metric View {identifier} directly; "
+                    "use a CTE for mixed Metric View plus table/view SQL"
+                )
 
     return errors, warnings
 
