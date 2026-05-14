@@ -264,7 +264,7 @@ Only include benchmark SQL that has been checked with read-only SQL execution or
 Run:
 
 ```bash
-python3 create-genie-space/scripts/validate_space_json.py <path-to-serialized-space.json>
+python3 external-agent/create-genie-space/scripts/validate_space_json.py <path-to-serialized-space.json>
 ```
 
 Fix errors before creating an API payload. Review warnings against `best-practices-checklist.md`.

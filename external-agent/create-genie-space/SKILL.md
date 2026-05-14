@@ -26,7 +26,7 @@ Create a new Databricks Genie Space configuration from selected Unity Catalog da
 5. **Validate locally.** Save the decoded JSON under `genie_configs/` or another user-requested path, then run:
 
    ```bash
-   python3 create-genie-space/scripts/validate_space_json.py <path-to-serialized-space.json>
+   python3 external-agent/create-genie-space/scripts/validate_space_json.py <path-to-serialized-space.json>
    ```
 
    Fix all structural errors. Treat warnings from the best-practice checks as items to either address or explain.
