@@ -15,10 +15,11 @@ Use this skill for iterative Databricks Genie space improvement in this repo. Ru
 
 ## Hard Rules
 
-- Never change underlying Databricks tables, table data, or schemas.
+- Never change underlying Databricks tables, views, metric views, data, or schemas.
 - Do not change benchmark questions or benchmark answers as part of Genie tuning. Benchmark questions and answers may change only in a dedicated benchmark bootstrap or repair config version after the changes are documented and SQL answers are validated with read-only inspection.
 - Use only read-only Databricks SQL for inspection.
-- Use the available Databricks SQL execution capability for exploratory analysis that inspects Databricks tables, schemas, sample values, joins, or metric behavior. In external coding agents, this is usually the DBSQL MCP; in Genie Code, use native DBSQL access.
+- Use the available Databricks SQL execution capability for exploratory analysis that inspects Databricks tables, views, metric views, schemas, sample values, joins, or metric behavior. In external coding agents, this is usually the DBSQL MCP; in Genie Code, use native DBSQL access.
+- You may edit Genie serialized-space metadata for existing tables, views, or metric views, but you must not create, alter, export, or mutate Unity Catalog metric views.
 - Keep all Genie changes in versioned decoded `serialized_space` JSON files under `genie_configs/`.
 - Before creating or editing a new config version, write the intended changes in `fix_plan/genie_<version>_quality_improvement_plan.md`.
 - Do not copy benchmark questions or benchmark answer SQL into sample questions, SQL snippets, or example SQL.
@@ -31,10 +32,10 @@ Use this skill for iterative Databricks Genie space improvement in this repo. Ru
 
 ## Exploratory Analysis With Databricks SQL
 
-When benchmark failure analysis requires live data or schema inspection, use the available Databricks SQL execution capability to run exploratory queries before proposing config changes. In external coding agents, this is usually the DBSQL MCP; in Genie Code, use native DBSQL access. Keep these queries read-only and bounded:
+When benchmark failure analysis requires live data, data-source, or schema inspection, use the available Databricks SQL execution capability to run exploratory queries before proposing config changes. In external coding agents, this is usually the DBSQL MCP; in Genie Code, use native DBSQL access. Keep these queries read-only and bounded:
 
 - Allowed: `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, and `information_schema` queries.
-- Not allowed: DDL, DML, `CREATE`, `ALTER`, `DROP`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `COPY INTO`, or any table/schema/data mutation.
+- Not allowed: DDL, DML, `CREATE`, `ALTER`, `DROP`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `COPY INTO`, or any table/view/metric-view/schema/data mutation.
 - Prefer explicit `LIMIT`s for row samples and targeted aggregate checks for cardinality, null rates, categorical values, join grain, and metric definitions.
 - Use Databricks SQL findings to support the fix plan, then make only serialized-space config edits under `genie_configs/`.
 
@@ -48,7 +49,7 @@ When benchmark failure analysis requires live data or schema inspection, use the
 
 2. Review the benchmark dataset before tuning. Confirm at least 30 valid question/answer pairs, check diversity and challenge level, and flag invalid ground-truth SQL using `references/quality-tuning.md` and `references/evals-and-reports.md`.
 
-   If the benchmark is too small, too simple, not diverse, or contains invalid answer SQL, document affected question IDs and weak coverage areas in the fix plan. Then use read-only dataset/schema inspection to author validated benchmark Q/A additions or replacements in a new config version. Do not mix benchmark bootstrap or repair changes with Genie tuning changes in the same config version.
+   If the benchmark is too small, too simple, not diverse, or contains invalid answer SQL, document affected question IDs and weak coverage areas in the fix plan. Then use read-only data-source/schema inspection to author validated benchmark Q/A additions or replacements in a new config version. Do not mix benchmark bootstrap or repair changes with Genie tuning changes in the same config version.
 
    Validate an intentional benchmark bootstrap or repair config with:
 
@@ -108,13 +109,15 @@ When benchmark failure analysis requires live data or schema inspection, use the
 
 Analyze failures using benchmark `assessment_reasons`, generated SQL, and expected SQL. Prefer the smallest config-only intervention that addresses the shared failure cause:
 
-- table and column metadata for wrong table or wrong column failures
+First inspect `data_sources.tables` and `data_sources.metric_views` in the decoded serialized space. A space can be table-backed, metric-view-backed, or contain both serialized collections; tune the actual configured source type instead of assuming tables. For metric-view-backed spaces, prefer existing metric view measures, dimensions, descriptions, synonyms, and agent metadata before adding broad instructions.
+
+- data-source and column metadata for wrong table, metric view, or column failures
 - `enable_format_assistance` and `enable_entity_matching` for categorical value confusion
 - `instructions.join_specs` for missing or incorrect joins
 - `instructions.sql_snippets` for reusable measures, filters, dimensions, and business logic
 - `instructions.example_question_sqls` only for representative complex patterns, never copied from benchmark questions or answers
 - `instructions.text_instructions` only for concise global behavior that cannot be encoded structurally
 
-Do not use `instructions.text_instructions` as a catch-all rulebook. If a proposed text instruction names specific tables, columns, joins, filters, denominators, numerators, aliases, ranking logic, or window logic, first move that guidance into metadata, join specs, SQL snippets, or example SQL. Keep only true global behavior in text instructions, document why it could not be encoded structurally, and format it with the section template in `references/quality-tuning.md`.
+Do not use `instructions.text_instructions` as a catch-all rulebook. If a proposed text instruction names specific tables, metric views, columns, joins, filters, denominators, numerators, aliases, ranking logic, or window logic, first move that guidance into metadata, join specs, SQL snippets, or example SQL. Keep only true global behavior in text instructions, document why it could not be encoded structurally, and format it with the section template in `references/quality-tuning.md`.
 
 Treat `NEEDS_REVIEW` separately from `BAD`, and compare per-question regressions after each candidate config update.

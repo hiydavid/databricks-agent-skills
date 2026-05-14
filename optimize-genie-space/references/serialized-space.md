@@ -18,6 +18,8 @@ genie_configs/<space_id>_vtest.json
 
 The local file should contain only the decoded `serialized_space` object, not the outer API response.
 
+Genie spaces can be backed by `data_sources.tables`, `data_sources.metric_views`, or both serialized collections. Treat metric views as first-class Genie data sources: their identifiers are three-part Unity Catalog names, and their configs can carry descriptions and column configs like tables. This workflow may tune serialized-space metadata for existing metric views, but it must not create, alter, export, or mutate Unity Catalog metric views.
+
 Validate syntax before building an API request:
 
 ```bash
@@ -79,8 +81,8 @@ Top-level fields:
 
 - `version`: required; use `2` for new spaces.
 - `config.sample_questions`: optional examples shown to users.
-- `data_sources.tables`: table configs. Each `identifier` must use `catalog.schema.table`.
-- `data_sources.metric_views`: metric view configs, same shape as tables.
+- `data_sources.tables`: table or view configs. Each `identifier` must use a three-part Unity Catalog name.
+- `data_sources.metric_views`: metric view configs, same shape as tables and first-class data sources that may be configured instead of tables.
 - `instructions.text_instructions`: high-level guidance.
 - `instructions.example_question_sqls`: example questions with SQL answers.
 - `instructions.sql_functions`: SQL functions available to the space.
@@ -94,12 +96,12 @@ Validation rules that commonly break updates:
 - Required IDs include sample questions, text instructions, example SQLs, join specs, SQL snippets, and benchmark questions.
 - Arrays with IDs or identifiers must be pre-sorted:
   - tables and metric views by `identifier`
-  - column configs by `column_name`
+  - column configs by `column_name` for both tables and metric views
   - sample questions, instructions, snippets, joins, and benchmarks by `id`
   - SQL functions by `(id, identifier)`
 - IDs in `config.sample_questions` and `benchmarks.questions` must be unique across both collections.
 - Instruction IDs must be unique across text instructions, example SQLs, SQL functions, join specs, and all SQL snippet types.
-- `(table_identifier, column_name)` must be unique for column configs.
+- `(source_identifier, column_name)` must be unique for column configs.
 - Individual string elements are limited to 25,000 characters.
 - Repeated fields are limited to 10,000 items.
 - At most one text instruction is allowed per space.

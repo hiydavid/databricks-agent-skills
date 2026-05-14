@@ -6,6 +6,8 @@ Reference docs:
 - Current knowledge store page: https://docs.databricks.com/aws/en/genie/knowledge-store
 - Best practices: https://docs.databricks.com/aws/en/genie/best-practices
 - Troubleshooting: https://docs.databricks.com/aws/en/genie/troubleshooting
+- Metric views: https://docs.databricks.com/gcp/en/business-semantics/metric-views
+- Query metric views: https://docs.databricks.com/gcp/en/business-semantics/metric-views/query
 
 Use this when analyzing benchmark reports and proposing edits to `serialized_space`.
 
@@ -28,7 +30,7 @@ Benchmarks evaluate quality but do not teach Genie by themselves. To improve qua
 
 Use these serialized-space areas for quality changes:
 
-- `data_sources.tables[].column_configs[]`
+- `data_sources.tables[].column_configs[]` and `data_sources.metric_views[].column_configs[]` when present
   - `enable_format_assistance`: representative value/type/format context.
   - `enable_entity_matching`: value matching for categorical string columns.
 - `instructions.join_specs`
@@ -42,6 +44,14 @@ Use these serialized-space areas for quality changes:
 - `benchmarks.questions`
   - Test coverage only; not tuning context.
 
+## Metric View Source Handling
+
+Before routing fixes, inspect both `data_sources.tables` and `data_sources.metric_views` in the decoded serialized space. Tune the source type that is actually configured for the space instead of assuming all sources are tables.
+
+Metric views are first-class Genie data sources in this workflow. For metric-view-backed spaces, prefer existing metric view measures, dimensions, filters, joins, descriptions, synonyms, and agent metadata before adding SQL snippets, example SQL, or text instructions. Use read-only `DESCRIBE TABLE EXTENDED <catalog.schema.metric_view> AS JSON` when benchmark evidence implicates a metric view definition and you need to inspect its YAML, measures, dimensions, joins, filters, or agent metadata.
+
+This workflow may tune serialized-space metadata for existing metric views. If the root cause is an incorrect or missing Unity Catalog metric view definition, document it as an upstream semantic-layer issue in the fix plan; do not create, alter, export, or mutate metric views as part of this skill.
+
 ## Text Instruction Guardrails
 
 `instructions.text_instructions` is the last resort for global behavior. Before editing it, decompose the proposed instruction into atomic rules and route each rule to the most structured config surface that can represent it.
@@ -54,7 +64,7 @@ Use `instructions.text_instructions` only for:
 
 Do not put these in `instructions.text_instructions`:
 
-- table-specific or column-specific metric definitions
+- source-specific or column-specific metric definitions
 - filters such as `status = 'Active'`, denominator/numerator rules, or categorical mappings
 - join paths or grain-preservation rules
 - benchmark-specific aliases or result-shape requirements
@@ -63,7 +73,7 @@ Do not put these in `instructions.text_instructions`:
 
 Use this routing instead:
 
-- table or column meaning, synonyms, and ambiguity -> table/column metadata
+- table, metric view, or column meaning, synonyms, and ambiguity -> data-source/column metadata
 - categorical value confusion -> `enable_format_assistance`, `enable_entity_matching`, or metadata
 - standard joins -> `instructions.join_specs`
 - reusable measures, filters, denominators, numerators, and business expressions -> `instructions.sql_snippets`
@@ -123,7 +133,7 @@ Benchmark Q/A additions or replacements should include:
 - the benchmark question text
 - the expected SQL answer
 - the coverage category, such as join, time logic, metric, filter, ranking/windowing, or result shape
-- the tables and columns used
+- the tables, metric views, and columns used
 - validation notes showing the SQL was checked with read-only inspection when possible
 - whether it is an addition or a replacement for an invalid, too-simple, or duplicate existing question
 
@@ -131,20 +141,20 @@ Benchmark Q/A additions or replacements should include:
 
 Use benchmark `assessment_reasons`, generated SQL, and expected SQL to choose the smallest useful intervention.
 
-### Wrong Table Or Column
+### Wrong Table, Metric View, Or Column
 
 Symptoms:
 
-- Genie selects a similarly named but incorrect column.
+- Genie selects a similarly named but incorrect table, metric view, or column.
 - Generated SQL omits a required dimension or uses the wrong date/status/amount field.
 - Assessment mentions missing or extra columns.
 
 Fixes:
 
-- Add or refine table/column descriptions and synonyms.
+- Add or refine table, metric view, or column descriptions and synonyms.
 - Hide irrelevant or confusing columns when possible.
 - Add an example SQL query if the question pattern is complex.
-- Use a view if the base schema has too many overlapping concepts.
+- Document an upstream view or metric view opportunity if the base schema has too many overlapping concepts.
 
 ### Wrong Filter Value
 
@@ -182,7 +192,7 @@ Avoid entity matching for high-cardinality free-text or identifier columns unles
 Symptoms:
 
 - Genie joins through the wrong key.
-- Genie misses a needed table.
+- Genie misses a needed source.
 - Generated SQL has duplicate rows from relationship cardinality mistakes.
 
 Fixes:
@@ -190,7 +200,7 @@ Fixes:
 - Add `instructions.join_specs` for standard relationships.
 - Prefer Unity Catalog PK/FK constraints when available.
 - Add example SQL for common multi-table patterns.
-- If joins are consistently complex, create a pre-joined view and use that in the space.
+- If joins are consistently complex, document whether an upstream pre-joined view or metric view should be created, then keep this workflow to serialized-space edits.
 
 For this banking space, likely standard joins include:
 
@@ -213,9 +223,12 @@ Symptoms:
 
 Fixes:
 
+- For metric-view-backed spaces, first inspect available metric view measures, dimensions, filters, joins, descriptions, synonyms, and agent metadata.
+- Use read-only `DESCRIBE TABLE EXTENDED <catalog.schema.metric_view> AS JSON` when benchmark evidence implicates a metric view definition.
+- If the metric view definition is wrong or missing, document it as an upstream semantic-layer issue instead of tuning `serialized_space`.
 - Add SQL snippets/expressions for reusable measures, filters, and dimensions.
 - Add example SQL for multi-step logic, windows, ratios, percentiles, and conditional aggregation.
-- Use views or metric views for highly reused metrics.
+- For table-backed spaces, document an upstream view or metric view opportunity for highly reused metrics.
 - Keep expression names and synonyms close to user phrasing.
 
 Good SQL-expression candidates from the benchmark set:
@@ -276,7 +289,7 @@ Fixes:
 ## Best-Practice Rules
 
 - Keep the space focused; remove or hide data that is not needed for the intended questions.
-- Prefer well-described tables and columns over long instructions.
+- Prefer well-described data sources and columns over long instructions.
 - Prefer SQL snippets/expressions and example SQL over text instructions.
 - Use text instructions only for global behavior, clarification behavior, or summary formatting.
 - Avoid contradictory guidance between text instructions, examples, snippets, and benchmark SQL.
@@ -289,9 +302,9 @@ Fixes:
 1. Open the versioned report, for example `results/v1_benchmark_report.json`.
 2. Group failures by `assessment_reasons`.
 3. Compare `genie_response[].response` SQL to `expected_response[].response` SQL.
-4. When the failure cause depends on live schema or data semantics, use the available Databricks SQL execution capability for read-only exploratory SQL such as bounded samples, cardinality checks, null-rate checks, distinct categorical values, join-grain checks, and `information_schema` lookups. In external coding agents, this is usually the DBSQL MCP; in Genie Code, use native DBSQL access.
+4. When the failure cause depends on live schema, metric view definition, or data semantics, use the available Databricks SQL execution capability for read-only exploratory SQL such as bounded samples, cardinality checks, null-rate checks, distinct categorical values, join-grain checks, `DESCRIBE TABLE EXTENDED <catalog.schema.metric_view> AS JSON`, and `information_schema` lookups. In external coding agents, this is usually the DBSQL MCP; in Genie Code, use native DBSQL access.
 5. Label each failure with one primary cause:
-   - wrong table/column
+   - wrong table/metric view/column
    - wrong filter value
    - wrong join
    - metric/business logic error
@@ -299,7 +312,7 @@ Fixes:
    - result shape error
    - execution/error issue
    - judge/manual-review issue
-6. Propose the smallest serialized-space edit category for each cluster. For any proposed text instruction, first decompose it into atomic rules and route metric, filter, join, alias, ranking, and window logic to structured config surfaces.
+6. Propose the smallest serialized-space edit category for each cluster. For any proposed text instruction, first decompose it into atomic rules and route source, metric, filter, join, alias, ranking, and window logic to structured config surfaces.
 7. Write the intended fixes in `fix_plan/genie_<version>_quality_improvement_plan.md` before editing the config.
 8. Apply only the planned edits to a new versioned config, update the space, run a fresh eval, and compare against the prior report.
 9. Append validation, deployment, eval run, measured accuracy, and regression notes to the same fix plan.

@@ -29,8 +29,8 @@ jq -r '.benchmarks.questions[]? | [.id, .question] | @tsv' genie_configs/<space_
 Benchmark answer SQL is ground truth for scoring. Invalid ground truth must be handled as a benchmark issue, not as a Genie tuning target.
 
 - If benchmark answer SQL errors during a benchmark run or read-only verification, classify the affected question as a benchmark-ground-truth issue.
-- Do not tune Genie to match invalid SQL, stale business logic, missing tables or columns, or SQL that cannot execute.
-- When possible, verify the issue with read-only SQL inspection only. Do not mutate tables, schemas, benchmark questions, or benchmark answers.
+- Do not tune Genie to match invalid SQL, stale business logic, missing data sources or columns, or SQL that cannot execute.
+- When possible, verify the issue with read-only SQL inspection only. Do not mutate tables, views, metric views, schemas, benchmark questions, or benchmark answers.
 - Record the benchmark question ID, observed error, verification notes, and recommended benchmark-owner correction in `fix_plan/genie_<version>_quality_improvement_plan.md`.
 - Exclude invalid-answer questions from accuracy interpretation and regression counts. Do not count them as Genie failures or regressions.
 - If fewer than 30 valid Q/A pairs remain after exclusions, treat the benchmark as insufficient for config tuning. Author enough validated benchmark Q/A additions or replacements to bring the valid set to at least 30, put them in a dedicated benchmark bootstrap or repair config version, update the Genie space, and run a new baseline eval before continuing config tuning.
