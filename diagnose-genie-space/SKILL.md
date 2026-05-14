@@ -1,6 +1,6 @@
 ---
 name: genie-space-diagnostics
-description: "Diagnose Databricks Genie Space quality problems and produce a concrete tuning plan. Use when users ask why a Genie Space cannot answer a question consistently, gives wrong SQL, chooses wrong tables or columns, mishandles filters or joins, or needs a configuration health check before optimization. This skill is plan-only: it may fetch/read space configuration and perform bounded read-only SQL inspection, but it must not edit serialized_space, update a Genie Space, run benchmark evals, or mutate Databricks data."
+description: "Diagnose Databricks Genie Space quality problems and produce a concrete tuning plan. Use when users ask why a Genie Space cannot answer a question consistently, gives wrong SQL, chooses wrong data sources, metric views, tables, columns, measures, dimensions, filters, or joins, or needs a configuration health check before optimization. This skill is plan-only: it may fetch/read space configuration and perform bounded read-only SQL inspection, but it must not edit serialized_space, update a Genie Space, run benchmark evals, or mutate Databricks data."
 ---
 
 # Genie Space Diagnostics
@@ -33,7 +33,7 @@ Ask for any missing inputs that materially affect diagnosis:
 
 - Genie Space ID, a 32-character hex string from the space URL.
 - Failing question, exactly as the user asks it.
-- Observed bad behavior: wrong table, wrong column, wrong filter value, missing join, wrong metric, inconsistent answers, SQL error, empty answer, or unclear.
+- Observed bad behavior: wrong data source, wrong metric view, wrong table, wrong column, wrong measure, wrong dimension, wrong time dimension, wrong filter scope, wrong grain, missing join, inconsistent answers, SQL error, empty answer, or unclear.
 - Actual generated SQL or error text, if available.
 - Expected answer, expected SQL, or business rule if available.
 - Whether the issue is intermittent or consistently reproducible.
@@ -87,7 +87,8 @@ Read only the references needed for the case:
 
 Use the fetched `serialized_space` to identify:
 
-- candidate tables, columns, metric views, and descriptions related to the failing question
+- candidate data sources, including tables, views, metric views, columns, measures, dimensions, and descriptions related to the failing question
+- metric view descriptions and, when available from read-only inspection, metric view sources, measures, dimensions, filters, joins, time dimensions, and agent metadata such as display names, synonyms, and formatting
 - relevant synonyms, `enable_format_assistance`, and `enable_entity_matching` flags
 - existing join specs for tables implicated by the question
 - SQL snippets for reusable measures, filters, and expressions
@@ -119,11 +120,14 @@ Not allowed:
 Use read-only SQL for:
 
 - confirming candidate column names and data types
+- inspecting metric view definitions with `DESCRIBE TABLE EXTENDED <catalog>.<schema>.<metric_view> AS JSON`
 - checking distinct categorical values and case/format mismatches
 - checking null rates, row counts, and cardinality
 - sampling a small number of rows with explicit `LIMIT`
 - validating join keys and join grain
 - understanding metric definitions when expected SQL or business rules are provided
+- querying a metric view with `MEASURE(...)`, explicit dimensions, `GROUP BY`, and `LIMIT` to verify available grouping dimensions, filters, and metric outputs
+- checking underlying PK/FK constraints and join grain only when metric view source SQL or joins are implicated
 
 Record the SQL purpose and findings in the report. Do not include broad exploratory dumps.
 
@@ -131,7 +135,9 @@ Record the SQL purpose and findings in the report. Do not include broad explorat
 
 Choose one primary failure class, plus secondary contributors if needed:
 
-- **Wrong table or column**: Genie selects a similarly named but incorrect source or omits a required field.
+- **Wrong data source, metric view, or field**: Genie selects a similarly named but incorrect source, metric view, table, column, measure, or dimension.
+- **Wrong metric view measure or dimension**: Genie uses the wrong governed metric, grouping dimension, display name, synonym, or metric-view field.
+- **Wrong metric view scope, time dimension, or grain**: Genie misses a persistent metric-view filter, uses the wrong date/time dimension, or aggregates at an invalid grain.
 - **Wrong filter value**: Genie uses a label, code, casing, date boundary, or categorical value that does not match stored data.
 - **Wrong join**: Genie misses a table, joins through the wrong key, or changes grain/cardinality.
 - **Metric or business logic error**: Genie calculates the wrong numerator, denominator, aggregation, ratio, or reusable business concept.
@@ -145,12 +151,14 @@ Choose one primary failure class, plus secondary contributors if needed:
 
 Recommend the smallest structured Genie configuration change that addresses the failure. Use this routing order:
 
-1. Table or column descriptions, synonyms, and hidden columns for table/column ambiguity.
-2. `enable_format_assistance` and `enable_entity_matching` for categorical value, formatting, or stored-value mismatch.
-3. `instructions.join_specs` for missing or incorrect joins.
-4. `instructions.sql_snippets` for reusable measures, filters, dimensions, and business expressions.
-5. `instructions.example_question_sqls` for representative complex patterns, multi-step logic, ranking, windows, or result shape.
-6. `instructions.text_instructions` only for concise global conventions that cannot be encoded structurally.
+1. Data source descriptions and scope for source-selection ambiguity, including metric view versus raw table overlap.
+2. Metric view modeling and agent metadata for governed metrics: measures, dimensions, filters, joins, time dimensions, display names, synonyms, formats, and comments.
+3. Table or column descriptions, synonyms, and hidden columns for raw table/column ambiguity.
+4. `enable_format_assistance` and `enable_entity_matching` for categorical value, formatting, or stored-value mismatch.
+5. `instructions.join_specs` for missing or incorrect joins between raw tables exposed directly to Genie.
+6. `instructions.sql_snippets` for reusable measures, filters, dimensions, and business expressions that are not already governed by a metric view.
+7. `instructions.example_question_sqls` for representative complex patterns, multi-step logic, ranking, windows, or result shape after structured metadata and metric view modeling are insufficient.
+8. `instructions.text_instructions` only for concise global conventions that cannot be encoded structurally.
 
 Do not recommend copying the failing question or benchmark answer verbatim into example SQL. Example SQL should teach a representative pattern, not memorize a test.
 
@@ -166,7 +174,8 @@ For every recommended change, include:
 
 Use `references/best-practices-checklist.md` as supporting evidence after the question-level diagnosis. Evaluate the health checks most relevant to the failure first, then summarize broader issues:
 
-- data source scope and metadata
+- data source scope and metadata across tables, views, and metric views
+- metric view descriptions, semantic coverage, agent metadata, persistent filter documentation, and time modeling
 - column descriptions, synonyms, format assistance, entity matching, and hidden noisy columns
 - text instruction focus
 - example SQL coverage and diversity
@@ -242,7 +251,7 @@ Rank by expected impact on the failing question.
 | Benchmarks exist | pass/fail | X benchmark questions found |
 | Benchmark count | pass/fail/warning | X questions; 30+ valid Q/A pairs recommended before benchmark-driven tuning |
 | Benchmark answer shape | pass/fail/warning | X questions have exactly one SQL answer |
-| Benchmark diversity | pass/warning | Coverage across tables, joins, metrics, filters, time logic, and result shapes |
+| Benchmark diversity | pass/warning | Coverage across data sources, metric views, measures, dimensions, joins, filters, time logic, and result shapes |
 | Critical static failures resolved | pass/warning | X issues should be addressed before optimization |
 
 **Verdict:** Ready / Needs Work / Not Ready

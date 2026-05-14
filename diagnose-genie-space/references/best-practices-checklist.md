@@ -14,13 +14,15 @@ Provide a brief explanation for each assessment and, for any fail/warning, give 
 
 When recommending fixes, route them to the most structured Genie config surface that can represent the behavior:
 
-1. table/column metadata and synonyms
-2. format assistance and entity matching for categorical values
-3. join specs
-4. SQL snippets for reusable filters, expressions, and measures
-5. representative example SQL for complex patterns
-6. SQL functions for trusted complex logic that cannot be captured with SQL expressions or static/parameterized examples
-7. text instructions only for concise global conventions
+1. data source scope and descriptions across tables, views, and metric views
+2. metric view measures, dimensions, filters, joins, time dimensions, and agent metadata for governed metrics
+3. table/column metadata and synonyms for raw table-backed questions
+4. format assistance and entity matching for categorical values
+5. join specs for raw tables exposed directly to Genie
+6. SQL snippets for reusable filters, expressions, and measures not already governed by metric views
+7. representative example SQL for complex patterns
+8. SQL functions for trusted complex logic that cannot be captured with SQL expressions or static/parameterized examples
+9. text instructions only for concise global conventions
 
 **Version detection:** First check `serialized_space.version`. If `2`, use v2 field names (`enable_format_assistance`, `enable_entity_matching`). If `1`, use v1 field names (`get_example_values`, `build_value_dictionary`). Do not mix v1 and v2 fields — v2 spaces reject v1 fields and vice versa.
 
@@ -28,13 +30,27 @@ When recommending fixes, route them to the most structured Genie config surface 
 
 ## Data Sources
 
-### Tables
+### Data Source Scope
 
-**Table Count (1–25, ideally ≤5 initially)**
-- Check: `serialized_space.data_sources.tables` array length
-- Why: Too many tables increases ambiguity and response latency. Start small and expand as needed.
-- Fail if: 0 tables or >25 tables
-- Warning if: >10 tables
+**Data Source Count (1–25, ideally ≤5 initially)**
+- Check: Total configured data sources across `serialized_space.data_sources.tables`, `serialized_space.data_sources.metric_views`, and any view-like data source arrays exposed by the serialized config. If Unity Catalog views appear as table-like entries under `tables`, count them as data sources.
+- Why: Genie Spaces can be backed by tables, views, and metric views. Too many overlapping sources increases ambiguity and response latency; no data sources means Genie has nothing structured to query.
+- Fail if: 0 total data sources or >25 total data sources
+- Warning if: >10 total data sources
+- Pass if: At least one table, view, or metric view is present. Zero tables is not a failure when metric views are present.
+
+**Focused Data Source Selection**
+- Check: Whether configured tables, views, and metric views appear relevant to the space's stated purpose (`title`, `description`)
+- Why: Including unnecessary data sources adds noise and confuses Genie's source selection.
+- Warning if: Data sources seem unrelated to the space's purpose
+
+**Mixed Table And Metric View Ambiguity**
+- Check: Whether raw tables/views and metric views expose overlapping business concepts such as revenue, orders, customers, or account balances
+- Why: Metric views should be the governed semantic surface for reusable business metrics. Exposing both a metric view and its raw source tables can make Genie choose the wrong source or reimplement governed logic inconsistently.
+- Warning if: Raw tables/views and metric views overlap on the same intended questions without clear descriptions or source-scoping guidance
+- NA if: The space is metric-view-only or table/view-only, or the mixed sources cover distinct domains
+
+### Tables And Views
 
 **Table Descriptions**
 - Check: Each table in `data_sources.tables[].description`
@@ -43,12 +59,9 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Good: `"description": "Daily sales transactions with line-item details, one row per product per order"`
 - Bad: `"description": ""` or `"description": "sales table"`
 
-**Focused Table Selection**
-- Check: Whether tables appear relevant to the space's stated purpose (`title`, `description`)
-- Why: Including unnecessary tables adds noise and confuses Genie's table selection.
-- Warning if: Tables seem unrelated to the space's purpose
+- NA if: The space has no raw table/view data sources
 
-### Columns
+### Table Columns
 
 **Column Descriptions**
 - Check: `data_sources.tables[].column_configs[].description`
@@ -86,9 +99,33 @@ When recommending fixes, route them to the most structured Genie config surface 
 
 **Metric View Descriptions**
 - Check: `data_sources.metric_views[].description` (if metric_views exist)
-- Why: Metric views surface pre-computed metrics. Without descriptions, Genie can't match questions to the right metric.
+- Why: Metric views define reusable, governed metrics. Without descriptions, Genie can't match questions to the right metric view.
 - Fail if: Metric views exist but lack descriptions
 - NA if: No metric views are defined
+
+**Metric View Semantic Coverage**
+- Check: Metric view definitions, when available through read-only inspection, for measures, dimensions, filters, joins, and time dimensions needed for the space's intended questions
+- Why: Metric views separate measure definitions from dimensions so governed metrics can be queried consistently across available dimensions.
+- Warning if: Intended questions require a measure, grouping dimension, filter dimension, join path, or time dimension that is absent from the metric view
+- NA if: No metric views are defined or the serialized config does not expose enough information and no read-only metric view definition was inspected
+
+**Metric View Agent Metadata**
+- Check: Metric view YAML agent metadata, when available, for display names, synonyms, formatting, and comments on important measures and dimensions
+- Why: Agent metadata gives business context to metric view measures and dimensions. Synonyms help Genie discover fields from user language, while display names and formats help make measures understandable and consistently presented.
+- Warning if: Important measures or dimensions have technical names, missing synonyms for common business terms, missing comments, or missing format metadata for currency, percentage, date, or other presentation-sensitive values
+- NA if: No metric views are defined or the metric view definition is not available for inspection
+
+**Persistent Filter Scope Documented**
+- Check: Metric view-level `filter` definitions and comments/descriptions when read-only metric view definitions are available
+- Why: Persistent filters define the metric scope, such as completed orders only. If the scope is invisible to Genie users and authors, generated answers can look inconsistent with raw-table expectations.
+- Warning if: A metric view-level filter materially changes metric scope but the metric view description, comment, or measure comments do not explain it
+- NA if: No metric views are defined, no persistent filter exists, or the metric view definition was not inspected
+
+**Metric View Time Modeling**
+- Check: Metric view dimensions for date/time fields and truncated time dimensions used by intended trend questions
+- Why: Genie needs clear time dimensions for detailed questions, period grouping, rolling windows, and trend analysis. Metric views should expose granular time dimensions and, where useful, truncated dimensions such as month, quarter, or year.
+- Warning if: Intended questions include trends, period comparisons, or rolling windows but the metric view lacks appropriate time dimensions or window/composed measures
+- NA if: No metric views are defined or intended questions do not involve time
 
 ---
 
@@ -108,8 +145,8 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Warning if: Instructions are excessively long (>500 words total) or contain embedded SQL
 
 **Business Jargon Mapped**
-- Check: Whether domain-specific terms are mapped in table/column descriptions, synonyms, SQL snippets, example SQLs, SQL functions, or global text instructions
-- Why: If users say "churn rate" but the data uses "customer_attrition_pct", Genie needs that mapping in the most structured surface that fits the concept.
+- Check: Whether domain-specific terms are mapped in metric view names/descriptions, measure/dimension display names, metric view synonyms, table/column descriptions, column synonyms, SQL snippets, example SQLs, SQL functions, or global text instructions
+- Why: If users say "churn rate" but the governed metric is named `customer_attrition_pct`, Genie needs that mapping in the most structured surface that fits the concept.
 - Warning if: The space uses specialized terminology without definitions
 
 ### Example Question SQLs
@@ -119,15 +156,15 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Why: Example SQLs teach Genie common prompt formats and complex query patterns it cannot infer from schema, metadata, joins, or reusable SQL snippets alone.
 - Fail if: A reported failure or benchmark evidence shows a complex/common organization-specific question pattern that lacks a representative example or SQL function
 - Warning if: The space likely has complex/common question patterns but no representative examples
-- NA if: The space only supports simple table/column lookup or aggregation patterns that are already covered by metadata, joins, and SQL snippets
+- NA if: The space only supports simple table/column lookup or aggregation patterns that are already covered by metadata, metric view definitions, joins, and SQL snippets
 
 **Examples Cover Complex Patterns**
-- Check: Whether example SQLs include multi-table joins, window functions, CTEs, or business logic
+- Check: Whether example SQLs include multi-table joins, metric view `MEASURE(...)` usage, window functions, CTEs, or business logic
 - Why: Simple queries (single table SELECT) don't need examples — Genie handles those. Examples should demonstrate patterns Genie would struggle with.
 - Warning if: All examples are simple single-table queries
 
 **Examples Are Diverse**
-- Check: Whether example SQLs cover different question types and tables
+- Check: Whether example SQLs cover different question types, data sources, metric views, tables, measures, and dimensions
 - Why: Redundant examples waste context. Each should teach a distinct pattern.
 - Warning if: Multiple examples use nearly identical patterns
 
@@ -153,8 +190,9 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Check: `serialized_space.instructions.join_specs` array
 - Why: Without explicit join specs, Genie may guess wrong join conditions, especially for self-joins or non-obvious foreign keys.
 - Warning if: Multiple tables exist but no join specs are defined
-- NA if: Only 1 table is configured
+- NA if: Only 1 table is configured, or the space is metric-view-only and the necessary joins are already modeled inside the metric view
 - Note: In serialized-space configs, multiple join specs between the same table pair is the safe pattern for multi-column joins. Keep each serialized join spec `sql` element to a single equality expression and add `comment` and `instruction` fields to related specs so they are used together. In the Databricks UI, more complicated join conditions can be captured with SQL expressions.
+- Metric view note: For governed metrics, prefer fixing joins in the metric view model when the metric view owns the semantic relationship. Use Genie join specs for raw tables exposed directly to Genie.
 
 **Join Specs Have Comments**
 - Check: `instructions.join_specs[].comment`
@@ -166,17 +204,18 @@ When recommending fixes, route them to the most structured Genie config surface 
 **Filter Snippets Defined**
 - Check: `serialized_space.instructions.sql_snippets.filters` array
 - Why: Common filters (time periods, active records, business-specific conditions) reduce errors when Genie needs to filter data.
-- Warning if: A reusable business-defined filter is implicated by the failing question, benchmarks, or sample questions but is not defined as a snippet
+- Warning if: A reusable business-defined filter is implicated by the failing question, benchmarks, or sample questions, is not already governed by a metric view filter or dimension, and is not defined as a snippet
 
 **Expression Snippets Defined**
 - Check: `serialized_space.instructions.sql_snippets.expressions` array
 - Why: Reusable expressions for categorizations, calculations, and business logic ensure consistency across queries.
-- Warning if: The space has reusable categorization, derived dimensions, calculations, or business logic that is not represented structurally
+- Warning if: The space has reusable categorization, derived dimensions, calculations, or business logic that is not represented structurally in a metric view or snippet
 
 **Measure Snippets Defined**
 - Check: `serialized_space.instructions.sql_snippets.measures` array
 - Why: Measures define standard aggregations (revenue, count, average) that should be computed consistently.
-- Warning if: Recurring KPIs, ratios, denominators, numerators, or named aggregations are expected but not represented as measures
+- Warning if: Recurring KPIs, ratios, denominators, numerators, or named aggregations are expected but not represented as metric view measures or SQL measure snippets
+- Note: If a metric view already governs the measure, prefer refining the metric view before duplicating the logic as a Genie SQL snippet.
 
 ---
 
@@ -191,7 +230,7 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Note: Static diagnosis can check answer shape and coverage, but it cannot prove expected SQL correctness unless the user provides read-only validation evidence
 
 **Benchmark Coverage**
-- Check: Whether benchmarks cover different tables, join patterns, aggregations, and filter types
+- Check: Whether benchmarks cover different data sources, metric views, measures, dimensions, join patterns, aggregations, and filter types
 - Why: Narrow benchmarks miss entire categories of user questions.
 - Warning if: Benchmarks only test one type of query pattern
 
@@ -222,7 +261,8 @@ When generating the prioritized remediation plan, assign each fix to a tier:
 
 ### Critical (must fix) — `fail` items related to the reported failure
 These are likely to cause incorrect answers. Fix before running the optimizer.
-- Missing table/column descriptions → wrong table/column selection
+- Missing data source descriptions → wrong source, metric view, table, or view selection
+- Missing metric view descriptions for metric-view-backed failures → wrong metric view selection
 - Missing representative examples/functions for a reported complex pattern → Genie can't learn or trust that pattern
 - Missing global text instructions for a relevant global convention → inconsistent interpretation across prompts
 - Missing parameter descriptions → incorrect parameterized queries
@@ -231,10 +271,13 @@ These are likely to cause incorrect answers. Fix before running the optimizer.
 ### Recommended (should fix) — `warning` items affecting accuracy
 These reduce answer quality. Fix before or during optimization.
 - Missing column synonyms → user terminology not mapped
+- Missing metric view agent metadata on important measures/dimensions → governed metrics are hard for Genie to discover from business language
+- Metric view missing measures, dimensions, filters, joins, or time dimensions needed by intended questions → governed metrics cannot answer those questions reliably
+- Raw tables/views overlap with metric views on the same business concepts → Genie may bypass governed metric definitions
 - Prompt matching not enabled on eligible categorical/filter columns → wrong filter values
 - Missing join specs (multi-table spaces) → wrong or missing joins
 - Fewer than 30 diverse benchmark Q&A pairs → weak baseline for optimization
-- Missing SQL snippets for reusable business logic implicated by questions or benchmarks → inconsistent aggregations/filters
+- Missing SQL snippets for reusable business logic implicated by questions or benchmarks and not already governed by a metric view → inconsistent aggregations/filters
 - Irrelevant columns not hidden → increased ambiguity
 
 ### Nice-to-Have — `warning` items affecting UX only

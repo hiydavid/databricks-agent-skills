@@ -43,7 +43,7 @@ Space-level configuration.
 
 ## `data_sources`
 
-Tables, columns, and metric views available to Genie.
+Tables, views, columns, and metric views available to Genie. Depending on the serialized config shape, Unity Catalog views may appear as table-like data sources under `tables`; count them as configured data sources when diagnosing source scope.
 
 ### Tables
 
@@ -85,7 +85,7 @@ Tables, columns, and metric views available to Genie.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `tables` | array | Unity Catalog tables exposed to Genie |
+| `tables` | array | Unity Catalog tables or table-like views exposed to Genie |
 | `tables[].id` | string | 32-char lowercase hex identifier |
 | `tables[].identifier` | string | Fully qualified table name (`catalog.schema.table`) |
 | `tables[].description` | array of strings | Human-readable description of the table |
@@ -99,12 +99,35 @@ Tables, columns, and metric views available to Genie.
 | `tables[].column_configs[].exclude` | boolean | Whether to hide this column from Genie |
 | `tables[].column_configs[].enable_entity_matching` | boolean | (v2 only — replaces `build_value_dictionary`) Whether Genie matches user terms to column values |
 | `tables[].column_configs[].enable_format_assistance` | boolean | (v2 only — replaces `get_example_values`) Whether Genie applies format hints for this column |
-| `metric_views` | array | Pre-computed metric views |
+| `metric_views` | array | Unity Catalog metric views exposed to Genie |
 | `metric_views[].id` | string | 32-char lowercase hex identifier |
 | `metric_views[].identifier` | string | Fully qualified metric view name |
 | `metric_views[].description` | array of strings | What the metric view computes |
 
 > **Version Note:** Spaces with `"version": 2` reject v1 fields (`get_example_values`, `build_value_dictionary`). Use their v2 equivalents (`enable_format_assistance`, `enable_entity_matching`) instead. Including v1 fields in a v2 space config will cause API errors.
+
+### Metric View Definition Inspection
+
+The serialized Genie config usually records the metric view identifier and local description, not the full metric view YAML definition. For metric-view-backed failures, use bounded read-only inspection of the metric view definition before falling back to source tables.
+
+Useful read-only SQL:
+
+```sql
+DESCRIBE TABLE EXTENDED <catalog>.<schema>.<metric_view_name> AS JSON
+```
+
+The returned metadata can expose the metric view definition, including:
+
+| Concept | Diagnostic use |
+|---------|----------------|
+| `source` | Confirms the source table, view, query, or source metric view behind the semantic model |
+| `measures` | Governed aggregations and KPIs; check names, expressions, comments, display names, synonyms, formats, filtered measures, composed measures, and window measures |
+| `dimensions` | Fields available for grouping, filtering, and result shape; check business names, comments, display names, synonyms, formats, and time dimensions |
+| `filter` | Persistent metric scope such as completed orders only, active accounts only, or production events only |
+| `joins` | Source relationships used by the metric view; check many-to-one assumptions, join grain, and exposed joined dimensions |
+| agent metadata | Display names, synonyms, formatting, and comments that help Genie and downstream tools interpret measures and dimensions |
+
+Query metric views with explicit dimensions and `MEASURE(<measure_name>)` for measures. Avoid using `SELECT *` as a metric-output check because measures must be evaluated explicitly.
 
 ---
 
@@ -342,7 +365,8 @@ Q&A pairs for validating Genie's SQL generation accuracy.
 | **Array length** | Maximum 10,000 items per array |
 | **ID uniqueness** | Question IDs must be unique across `sample_questions` and `benchmarks.questions` |
 | **Instruction ID uniqueness** | IDs must be unique across text instructions, example SQLs, SQL functions, join specs, and all SQL snippet types |
-| **Column uniqueness** | `(table_identifier, column_name)` must be unique for column configs |
+| **Data source presence** | At least one table-like data source or metric view must be present; zero `tables` is valid when `metric_views` contains valid entries |
+| **Column uniqueness** | `(table_identifier, column_name)` must be unique for raw table/view column configs |
 | **Text instruction count** | At most one text instruction is allowed per space |
 | **Join spec shape** | `join_specs[].sql` must have exactly two elements: one equality condition and one valid relationship annotation |
 | **Join relationship annotations** | Valid values are `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_MANY--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_ONE--`, and `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_MANY--` |

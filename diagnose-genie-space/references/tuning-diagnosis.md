@@ -12,27 +12,30 @@ Prefer structured, SQL-grounded Genie context over broad text instructions.
 
 Recommended routing order:
 
-1. Data scope and table/column metadata
-2. Prompt matching on categorical values
-3. Join relationships
-4. SQL snippets/expressions for reusable business logic
-5. Static or parameterized example SQL for common prompt formats and complex query patterns
-6. SQL functions for trusted complex logic that cannot be captured with SQL expressions or example SQL
-7. Text instructions only for global behavior that cannot be encoded above
+1. Data scope, including whether the right metric view, table, or view is exposed
+2. Metric view semantics for governed metrics: measures, dimensions, filters, joins, time dimensions, and agent metadata
+3. Table/column metadata for raw table-backed questions
+4. Prompt matching on categorical values
+5. Join relationships for raw tables exposed directly to Genie
+6. SQL snippets/expressions for reusable business logic not already governed by metric views
+7. Static or parameterized example SQL for common prompt formats and complex query patterns
+8. SQL functions for trusted complex logic that cannot be captured with SQL expressions or example SQL
+9. Text instructions only for global behavior that cannot be encoded above
 
-Benchmarks evaluate quality but do not teach Genie by themselves. Failed questions should be translated into metadata, join specs, SQL snippets, representative example SQL, SQL functions, or focused global instructions.
+Benchmarks evaluate quality but do not teach Genie by themselves. Failed questions should be translated into data source metadata, metric view model/agent metadata, join specs, SQL snippets, representative example SQL, SQL functions, or focused global instructions.
 
 ## Evidence To Gather
 
 Start from the failing question and the user's expected behavior. Then inspect the serialized space for:
 
-- relevant table and metric view identifiers
+- relevant table, view, and metric view identifiers and descriptions
+- metric view definitions when the failing question uses governed metrics, including source, measures, dimensions, filters, joins, time dimensions, comments, display names, synonyms, and format metadata
 - table and column descriptions
 - column synonyms
 - `enable_format_assistance` and `enable_entity_matching` flags for v2 spaces
 - `get_example_values` and `build_value_dictionary` flags for v1 spaces
 - hidden/noisy columns via `exclude`
-- join specs and join comments
+- join specs and join comments for raw tables directly exposed to Genie
 - SQL snippets for filters, expressions, and measures
 - example SQLs with similar query patterns
 - SQL functions available to the space
@@ -42,14 +45,18 @@ Start from the failing question and the user's expected behavior. Then inspect t
 Use the DBSQL MCP, Databricks SQL, or notebook SQL cells for read-only SQL only when the serialized space does not answer the diagnostic question. Good inspection queries include:
 
 - `DESCRIBE <catalog>.<schema>.<table>`
+- `DESCRIBE TABLE EXTENDED <catalog>.<schema>.<metric_view> AS JSON` to inspect metric view YAML, measures, dimensions, joins, filters, and agent metadata
 - `SHOW COLUMNS IN <catalog>.<schema>.<table>`
 - `SELECT COUNT(*) ...`
 - `SELECT <column>, COUNT(*) ... GROUP BY <column> ORDER BY 2 DESC LIMIT 50`
+- metric view checks that explicitly list dimensions and evaluate measures with `MEASURE(<measure_name>)`
 - bounded `SELECT ... LIMIT 20` samples
 - `information_schema` lookups for columns, constraints, and table metadata
 - join-grain checks such as row counts before and after a candidate join
 
 Never use DDL or DML for diagnosis.
+
+When a metric view is implicated, inspect the metric view definition and run bounded metric-view queries before inspecting underlying raw tables. Drop down to source tables only to verify metric view source SQL, PK/FK constraints, join cardinality, filter scope, or grain issues.
 
 ## Prompt Matching Constraints
 
@@ -62,18 +69,38 @@ Apply these constraints before recommending format assistance or entity matching
 - Tables with row filters or column masks are excluded from prompt matching. Space authors must disable entity matching for views that reference tables with row filters or column masks, and for dynamic views.
 - Refresh prompt matching values when new values are added or existing values change format.
 
+## Metric View Tuning Guidance
+
+Use metric views as the preferred governed surface for business metrics when the space includes them. Metric views define reusable measures and allow those measures to be grouped by available dimensions at query time. They can also encode filters, joins, window measures, composed measures, and agent metadata.
+
+Before recommending Genie SQL snippets or text instructions for a metric failure, check whether the behavior belongs in the metric view itself:
+
+- wrong metric view selected: improve metric view descriptions, comments, display names, synonyms, or remove/clarify overlapping raw sources
+- wrong measure: refine the metric view measure name, expression, comment, display name, synonyms, format, or composed-measure definition
+- wrong dimension: add or clarify metric view dimensions and their metadata
+- wrong time dimension: expose the granular date/time dimension and useful truncated dimensions such as day, month, quarter, or year; use window measures for rolling, cumulative, period-over-period, or semiadditive metrics
+- wrong persistent filter or scope: document metric view-level filters in the metric view description/comment or measure comments, and refine the filter when the governed metric scope is wrong
+- wrong metric grain: check whether the metric view measure is atomic, composed, windowed, semiadditive, or filtered correctly, and whether the selected grouping dimensions preserve the intended grain
+- wrong join inside a metric: refine the metric view join model and verify many-to-one assumptions before adding Genie join specs around raw source tables
+
+Query metric views with explicit dimensions and `MEASURE(...)` for measures. Do not assume `SELECT *` is a valid diagnostic query for metric outputs. If a metric view must be joined to another table at query time, inspect whether the recommended pattern should wrap the metric view query in a CTE before the join.
+
 ## Failure Classes
 
-### Wrong Table Or Column
+### Wrong Data Source, Metric View, Or Field
 
 Symptoms:
 
-- Genie selects a similarly named but incorrect table or column.
+- Genie selects a similarly named but incorrect data source, metric view, table, view, column, measure, or dimension.
+- Genie uses a raw table when a governed metric view should answer the question, or uses a metric view when the question needs raw detail rows.
 - Generated SQL omits a required dimension, date, status, amount, or identifier.
-- The user says Genie "does not know which field to use."
+- The user says Genie "does not know which source or field to use."
 
 Likely causes:
 
+- missing or generic metric view descriptions
+- missing or generic metric view measure/dimension names, comments, display names, or synonyms
+- raw tables/views and metric views overlap on the same business concepts
 - missing or generic table descriptions
 - missing or generic column descriptions
 - missing synonyms for business terms
@@ -82,6 +109,8 @@ Likely causes:
 
 Recommended fixes:
 
+- Refine metric view descriptions and agent metadata when a governed metric is implicated.
+- Clarify or reduce overlap between raw sources and metric views that represent the same business concepts.
 - Add or refine table and column descriptions.
 - Add user-facing synonyms to key business columns.
 - Hide irrelevant IDs, ingestion fields, audit timestamps, or duplicate columns with `exclude: true`.
@@ -91,6 +120,65 @@ Avoid:
 
 - adding a text instruction that says "always use column X" when metadata can express the distinction
 - hiding required technical keys that join specs need
+
+### Wrong Metric View Measure Or Dimension
+
+Symptoms:
+
+- Genie selects the right metric view but uses the wrong measure.
+- Genie groups by the wrong dimension or misses a required dimension.
+- Genie confuses business terms such as bookings, billings, ARR, revenue, active users, conversion, or retention.
+- Generated SQL does not use the expected `MEASURE(...)` call for a metric view measure.
+
+Likely causes:
+
+- the metric view does not expose the needed measure or dimension
+- measure or dimension names are too technical or too similar
+- missing display names, synonyms, comments, or format metadata
+- a complex metric is modeled as one opaque expression instead of atomic and composed measures
+- examples or snippets duplicate stale raw-table logic instead of using the metric view
+
+Recommended fixes:
+
+- Add or refine metric view measures and dimensions when the governed semantic model is missing needed concepts.
+- Add agent metadata: business-facing display names, synonyms, comments, and formats for important measures and dimensions.
+- Model complex ratios from atomic measures with `MEASURE(...)` references rather than repeating aggregation logic.
+- Add example SQL only when the question shape needs a representative metric view query pattern after the metric view itself is clear.
+
+Avoid:
+
+- adding a raw-table SQL snippet that duplicates a governed metric view measure
+- solving measure selection with a broad text instruction when measure metadata can encode the mapping
+
+### Wrong Metric View Scope, Time Dimension, Or Grain
+
+Symptoms:
+
+- Genie answers from the right metric view but includes records outside the intended metric scope.
+- A metric view-level filter such as completed orders, active accounts, or production events is missing, hidden, or misunderstood.
+- Genie uses the wrong date/time dimension or date truncation.
+- Rolling, cumulative, period-over-period, or balance-style questions return the wrong grain.
+- Aggregating a semiadditive measure across time gives nonsensical results.
+
+Likely causes:
+
+- metric view persistent filters are absent, wrong, or not documented in descriptions/comments
+- the metric view lacks granular or truncated time dimensions needed by the question
+- window, composed, filtered, or semiadditive measures are not modeled for the intended question type
+- source joins inside the metric view change row grain or violate expected many-to-one relationships
+
+Recommended fixes:
+
+- Add or refine metric view-level filters when the governed metric should always use a scoped population.
+- Document persistent filter scope in the metric view description, view comment, or measure comments.
+- Add clear time dimensions and truncated dimensions for common trend grains.
+- Use metric view window measures for rolling, cumulative, period-over-period, and semiadditive metrics when available.
+- Validate source joins and PK/FK constraints with bounded read-only SQL before changing Genie join specs.
+
+Avoid:
+
+- adding text instructions that restate hidden filter logic without fixing the metric view scope
+- adding example SQL that works around a broken governed metric definition
 
 ### Wrong Filter Value
 
@@ -141,7 +229,8 @@ Likely causes:
 
 Recommended fixes:
 
-- Add or refine `instructions.join_specs`.
+- Add or refine `instructions.join_specs` when raw tables are exposed directly to Genie.
+- For metric-view-owned relationships, refine the metric view join model first.
 - For serialized-space config changes, use one join spec per equality condition for multi-column joins.
 - For Databricks UI workflows, use SQL expressions for more complicated join conditions when the UI supports them.
 - Include `comment` and `instruction` text explaining relationship meaning and when related specs should be used together.
@@ -163,6 +252,7 @@ Symptoms:
 
 Likely causes:
 
+- governed metric definitions are missing, incomplete, or ambiguous in the metric view
 - reusable metrics are not encoded as SQL snippets
 - denominator/numerator rules live only in prose
 - relevant columns lack descriptions or synonyms
@@ -170,9 +260,10 @@ Likely causes:
 
 Recommended fixes:
 
-- Add SQL measure snippets for standard aggregations.
-- Add SQL expression snippets for reusable CASE logic, dimensions, ratios, or derived fields.
-- Add SQL filter snippets for recurring exclusions or business states.
+- For metric-view-backed governed metrics, refine the metric view first: atomic measures, composed measures, filtered measures, window measures, dimensions, filters, joins, and agent metadata.
+- Add SQL measure snippets for standard aggregations only when no metric view governs the metric.
+- Add SQL expression snippets for reusable CASE logic, dimensions, ratios, or derived fields when those concepts are not better modeled in a metric view.
+- Add SQL filter snippets for recurring exclusions or business states when they are not metric view-level scope.
 - Add representative example SQL for multi-step metrics, windows, ratios, or conditional aggregation.
 - Add a Unity Catalog SQL function when logic is too complex or sensitive to expose as example SQL or snippets, or when a trusted reusable function is the right interface.
 
@@ -192,6 +283,7 @@ Symptoms:
 
 Likely causes:
 
+- metric view time dimensions or window measures are missing, ambiguous, or too coarse
 - date columns are insufficiently described
 - global fiscal calendar or timezone conventions are absent
 - reusable date filters are missing
@@ -199,6 +291,7 @@ Likely causes:
 
 Recommended fixes:
 
+- For metric views, add or clarify granular and truncated time dimensions, and use window measures for rolling, cumulative, period-over-period, or semiadditive logic.
 - Add date column descriptions and synonyms.
 - Add filter snippets for standard periods when they are reusable.
 - Add example SQL for rolling windows, prior-period comparisons, or grain-sensitive time logic.
@@ -214,12 +307,14 @@ Symptoms:
 
 Likely causes:
 
+- the metric view query is using the wrong measure/dimension grouping or omits required `MEASURE(...)` expressions
 - the result-shape expectation is a complex pattern, not a simple metadata issue
 - examples do not cover ranking/window/shape conventions
 - text instructions overfit aliases or benchmark-only output details
 
 Recommended fixes:
 
+- For metric view queries, clarify which dimensions and measures should appear for the question type.
 - Add representative example SQL for the expected result shape.
 - Add snippets for reusable ranking or dimension logic when possible.
 - Use a SQL function if the result shape depends on complex trusted logic that should not be rewritten by Genie.
@@ -243,8 +338,10 @@ Likely causes:
 Recommended fixes:
 
 - Move table/column meaning into metadata.
+- Move governed metric definitions into metric views when a metric view owns the business concept.
+- Move metric view discovery terms into metric view descriptions, display names, synonyms, comments, and formats.
 - Move categorical value handling into format assistance, entity matching, synonyms, or filter snippets.
-- Move joins into join specs.
+- Move raw table joins into join specs; move metric-view-owned joins into the metric view model.
 - Move reusable measures and filters into SQL snippets.
 - Move trusted complex logic into SQL functions when examples and snippets are insufficient.
 - Keep only concise global conventions in `instructions.text_instructions`.
@@ -265,11 +362,11 @@ Use `instructions.text_instructions` only for:
 
 - global conventions that apply across the space, such as fiscal calendar, timezone, default rounding, or clarification behavior
 - brief result-presentation conventions that are truly universal
-- behavior that cannot be represented with metadata, join specs, SQL snippets, or example SQL
+- behavior that cannot be represented with metric views, metadata, join specs, SQL snippets, or example SQL
 
 Do not put these in text instructions:
 
-- table-specific or column-specific metric definitions
+- table-specific, column-specific, or metric-view-owned metric definitions
 - filters such as `status = 'Active'`, denominator/numerator rules, or categorical mappings
 - join paths or grain-preservation rules
 - benchmark-specific aliases or result-shape requirements
@@ -308,7 +405,7 @@ Static diagnosis can inspect benchmark shape and coverage, but it does not prove
 
 - **Not Ready**: fewer than 10 benchmark Q/A pairs, no SQL answers, or malformed benchmark answer shapes.
 - **Needs Work**: 10-29 valid-looking SQL Q/A pairs, weak diversity, repeated simple questions, or unclear expected SQL.
-- **Ready for baseline eval**: 30+ valid-looking SQL Q/A pairs with diverse coverage across entities, metrics, dimensions, filters, joins, time logic, aggregations, ranking/window patterns, and result shapes.
+- **Ready for baseline eval**: 30+ valid-looking SQL Q/A pairs with diverse coverage across data sources, metric views, measures, dimensions, filters, joins, time logic, aggregations, ranking/window patterns, and result shapes.
 
 Invalid ground-truth SQL is a benchmark issue, not a Genie tuning target. If the user provides eval evidence that expected SQL errors or is semantically stale, recommend benchmark repair before tuning.
 
@@ -318,7 +415,7 @@ For every suggested fix, write:
 
 - **Failure class**: one primary class from this reference.
 - **Evidence**: serialized-space fields and read-only SQL findings that support the diagnosis.
-- **Config surface**: metadata, entity/format assistance, join spec, SQL snippet/expression, example SQL, SQL function, or text instruction.
+- **Config surface**: data source metadata, metric view model/agent metadata, entity/format assistance, join spec, SQL snippet/expression, example SQL, SQL function, or text instruction.
 - **Suggested change**: exact wording or JSON-level intent, without editing the config.
 - **Why this surface**: why a more structured surface is better than a broader instruction.
 - **Validation**: how to test after implementation, usually by retrying the failing question and then running benchmark evals via `optimize-genie-space`.
