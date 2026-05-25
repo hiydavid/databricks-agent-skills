@@ -35,6 +35,119 @@ Benchmark answer SQL is ground truth for scoring. Invalid ground truth must be h
 - Exclude invalid-answer questions from accuracy interpretation and regression counts. Do not count them as Genie failures or regressions.
 - If fewer than 30 valid Q/A pairs remain after exclusions, treat the benchmark as insufficient for config tuning. Author enough validated benchmark Q/A additions or replacements to bring the valid set to at least 30, put them in a dedicated benchmark bootstrap or repair config version, update the Genie space, and run a new baseline eval before continuing config tuning.
 
+## Valid Denominator Rules
+
+Use only valid, completed benchmark results when interpreting tuning accuracy.
+
+Exclude these from the tuning denominator and regression counts:
+
+- invalid expected SQL or stale benchmark answers;
+- benchmark questions that no longer match the current data model;
+- incomplete or missing eval output;
+- permission, API, warehouse, or platform failures;
+- questions with insufficient evidence to decide whether Genie tuning caused the failure.
+
+Keep exclusions explicit in the fix plan and comparison notes. Do not count invalid benchmark or infra failures as Genie repair targets. If exclusions leave fewer than 30 valid Q/A pairs, pause Genie config tuning and do benchmark repair or expansion first.
+
+## Judge-Style Failure Triage
+
+Use GSO-style judging as a mental model only. Do not implement custom judges. For each `BAD` or `NEEDS_REVIEW` question, inspect generated SQL, expected SQL, actual results, and assessment notes when available, then classify the failure across these dimensions:
+
+- `result_correctness`: Did actual results match expected results after reasonable normalization?
+- `asset_routing`: Did Genie choose the right table, metric view, or configured source?
+- `schema_accuracy`: Did Genie choose the right columns and aliases?
+- `logical_accuracy`: Did filters, joins, aggregations, dates, windows, ranking, and grain match intent?
+- `completeness`: Did the response answer all required parts?
+- `syntax_validity`: Did generated SQL run?
+- `response_quality`: Was the final explanation/presentation acceptable when SQL was otherwise correct?
+- `benchmark_validity`: Is the expected answer itself valid and current?
+- `infra_validity`: Was the eval complete and free of platform/access failures?
+
+Repair triage template:
+
+```markdown
+## Repair Triage
+
+| Question ID | Assessment | Valid tuning failure? | Primary failure | Secondary signal | Recommended lever | Notes |
+|---|---|---:|---|---|---|---|
+| q_001 | BAD | yes | wrong_filter_value | logical_accuracy | entity/value matching + column metadata | status value mismatch |
+| q_002 | BAD | no | invalid_expected_sql | benchmark_validity | benchmark repair, not config tuning | expected SQL references removed column |
+```
+
+Rules:
+
+- Triage `NEEDS_REVIEW` separately from `BAD`.
+- Do not infer root cause from aggregate accuracy alone.
+- Use `unknown` or `manual_review` when evidence is insufficient.
+- Exclude invalid benchmark and infra failures before selecting Genie repair levers.
+
+## Affected Slice, Regression Slice, And Full Benchmark Gates
+
+Use staged evaluation inside the existing helper-script loop. Do not build a new gate framework.
+
+Gate 1: affected failure slice
+
+- Run the affected failing questions first when practical.
+- Purpose: verify the candidate fixes the target cluster.
+- If it fails, revise or roll back before spending effort on the full benchmark.
+
+Gate 2: related regression slice
+
+- Run previous-good questions that share the same sources, joins, filters, metrics, or date logic.
+- Purpose: catch localized regressions quickly.
+
+Gate 3: full benchmark
+
+- Run the complete benchmark after the targeted and regression checks look acceptable, or when targeted evaluation is unavailable or not representative.
+
+Run selected benchmark questions by repeating `--benchmark-question-id`:
+
+```bash
+python3 .agents/skills/databricks-genie-improve/scripts/genie_loop.py create-eval-run \
+  --space-id <space_id> \
+  --benchmark-question-id <question_id> \
+  --profile fevm-test
+```
+
+## Question-Level Movement Summary
+
+Compare question-level movement, not only aggregate accuracy:
+
+```text
+fixed: BAD/NEEDS_REVIEW -> GOOD
+regressed: GOOD -> BAD/NEEDS_REVIEW
+unchanged_bad: BAD/NEEDS_REVIEW -> BAD/NEEDS_REVIEW
+unchanged_good: GOOD -> GOOD
+excluded: invalid benchmark, incomplete eval, infra/access issue
+```
+
+Record fixed and regressed question IDs in the fix plan. A candidate that fixes one question but regresses several related previous-good questions should not be accepted by default.
+
+## Acceptance Decision Template
+
+After comparing reports, add an explicit keep/revise/rollback decision:
+
+```markdown
+## Acceptance Decision
+
+- Baseline report:
+- Candidate report:
+- Candidate config or Space version:
+- Valid denominator used:
+- Accuracy delta:
+- Fixed:
+- Regressed:
+- Unchanged target failures:
+- New syntax/access/eval issues:
+- Benchmark or infra exclusions:
+- Leakage review:
+- Decision: KEEP / REVISE / ROLL BACK
+- Reason:
+- Rollback action, if needed:
+```
+
+Keep the candidate only when it improves valid benchmark accuracy or fixes the target cluster without unacceptable regressions. Roll back or revise when the candidate only shifts failures, creates new syntax/infra issues, or depends on benchmark leakage.
+
 ## Benchmark Bootstrap Or Repair Eval Flow
 
 Use this flow when the space has too few benchmark Q/A pairs, weak coverage, overly simple questions, duplicate patterns, or invalid ground-truth SQL.

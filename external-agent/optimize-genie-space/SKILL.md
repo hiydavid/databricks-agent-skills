@@ -22,6 +22,7 @@ Use this skill for iterative Databricks Genie space improvement in this repo. Ru
 - You may edit Genie serialized-space metadata for existing tables, views, or metric views, but you must not create, alter, export, or mutate Unity Catalog metric views.
 - Keep all Genie changes in versioned decoded `serialized_space` JSON files under `genie_configs/`.
 - Before creating or editing a new config version, write the intended changes in `fix_plan/genie_<version>_quality_improvement_plan.md`.
+- Every tuning pass must name the target failure cluster and repair lever before editing JSON. Prefer one cluster or a small set of related clusters per version so regressions are attributable.
 - Do not copy benchmark questions or benchmark answer SQL into sample questions, SQL snippets, or example SQL.
 - Use simple report filenames such as `results/v0_benchmark_report.json`; do not put eval run IDs in report filenames.
 - Benchmark eval runs are asynchronous. Immediately after `create-eval-run`, `genie-list-eval-results` can return zero results while the benchmark is still running. Do not treat a zero-result report as complete, do not compare it, and do not report accuracy from it.
@@ -65,7 +66,18 @@ When benchmark failure analysis requires live data, data-source, or schema inspe
    fix_plan/genie_v1_quality_improvement_plan.md
    ```
 
-   Include the input report path, benchmark review findings, baseline accuracy summary, excluded invalid-answer questions, failure clusters, intended serialized-space changes, expected impact, risks, and regression checks.
+   Do not patch directly from aggregate accuracy. Create the repair plan with:
+
+   - input report path and baseline accuracy summary;
+   - benchmark validity exclusions for invalid expected SQL, stale questions, permissions, API, warehouse, or incomplete-eval issues;
+   - separate repair triage for `BAD` and `NEEDS_REVIEW` questions;
+   - failure clusters with evidence from generated SQL, expected SQL, actual results, and assessment notes when available;
+   - the chosen target cluster for this pass;
+   - the smallest structured serialized-space repair lever;
+   - proactive enrichment checks considered;
+   - affected question IDs for targeted eval when practical;
+   - related previous-good regression questions to watch;
+   - acceptance criteria for keep, revise, or roll back.
 
 4. Copy the latest config to the next version manually, for example `genie_configs/<space_id>_v1.json`, and make only the config-level Genie tuning edits described in the fix plan.
 
@@ -81,11 +93,19 @@ When benchmark failure analysis requires live data, data-source, or schema inspe
    python3 .agents/skills/databricks-genie-improve/scripts/genie_loop.py update-space --space-id <id> --config genie_configs/<id>_v1.json --profile fevm-test
    ```
 
-7. Create an eval run:
+7. Create the narrowest useful eval run:
 
    ```bash
    python3 .agents/skills/databricks-genie-improve/scripts/genie_loop.py create-eval-run --space-id <id> --profile fevm-test
    ```
+
+   When a candidate targets a known failure cluster, first run an affected-question slice when practical:
+
+   ```bash
+   python3 .agents/skills/databricks-genie-improve/scripts/genie_loop.py create-eval-run --space-id <id> --benchmark-question-id <question_id> --profile fevm-test
+   ```
+
+   Repeat `--benchmark-question-id` for multiple affected or regression questions. Then run a small related regression slice of previous-good questions if feasible. Run the full benchmark after the targeted checks look acceptable, or immediately if subset eval is unavailable or not representative. Document the gate used in the fix plan.
 
    Save the returned eval run ID. The command submits the benchmark; it does not mean results are immediately available.
 
@@ -103,11 +123,13 @@ When benchmark failure analysis requires live data, data-source, or schema inspe
    python3 .agents/skills/databricks-genie-improve/scripts/genie_loop.py compare-reports --baseline results/v0_benchmark_report.json --candidate results/v1_benchmark_report.json --out results/v0_to_v1_accuracy_comparison.json
    ```
 
-10. Append validation, deployment, eval run, versioned report, measured accuracy, comparison, invalid-answer exclusions, and regression notes to the same fix plan.
+10. Append validation, deployment, eval run, versioned report, measured accuracy, comparison, invalid-answer exclusions, question-level movement, acceptance decision, and regression notes to the same fix plan.
+
+11. Before starting another repair iteration, read the prior plan's iteration reflection. Avoid repeating a lever that already failed for the same root cause unless new evidence explains why it should work now.
 
 ## Tuning Guidance
 
-Analyze failures using benchmark `assessment_reasons`, generated SQL, and expected SQL. Prefer the smallest config-only intervention that addresses the shared failure cause:
+Analyze failures using benchmark `assessment_reasons`, generated SQL, and expected SQL. Use `references/quality-tuning.md` to classify failures, cluster root causes, and choose the smallest config-only intervention that addresses the shared failure cause:
 
 First inspect `data_sources.tables` and `data_sources.metric_views` in the decoded serialized space. A space can be table-backed, metric-view-backed, or contain both serialized collections; tune the actual configured source type instead of assuming tables. For metric-view-backed spaces, prefer existing metric view measures, dimensions, descriptions, synonyms, and agent metadata before adding broad instructions.
 

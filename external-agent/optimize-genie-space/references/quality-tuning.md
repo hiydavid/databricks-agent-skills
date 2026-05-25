@@ -26,6 +26,131 @@ Recommended priority:
 
 Benchmarks evaluate quality but do not teach Genie by themselves. To improve quality, translate failed benchmark evidence into metadata, join specs, SQL snippets, example SQL, or focused text instructions.
 
+## Repair Decision Stack
+
+Before editing a config version, answer these questions in the fix plan:
+
+1. Is this a valid tuning failure?
+   - Exclude invalid expected SQL, stale benchmark questions, permissions, warehouse/API failures, and incomplete eval output.
+2. What changed in the generated SQL or answer?
+   - Wrong source, wrong column, wrong join, wrong filter value, missing filter, wrong aggregation, wrong time logic, wrong metric formula, wrong grain, missing output field, syntax failure, or answer-prose issue.
+3. What is the smallest repair lever?
+   - Source/column metadata, Metric View metadata, entity/value matching, format assistance, join spec, SQL snippet, representative example SQL, or text instruction.
+4. Is there a proactive enrichment that would help multiple failures?
+   - Missing descriptions, synonyms, categorical value semantics, date-role descriptions, reusable filters/measures, join specs, examples for complex grain/ranking/window logic.
+5. What slice proves the repair?
+   - Identify affected benchmark question IDs and related previous-good regression questions.
+6. What should be recorded for the next loop?
+   - Cluster, attempted lever, expected impact, result, regressions, and whether to retry or avoid the approach.
+
+Every tuning pass must name the target failure cluster and repair lever before editing JSON.
+
+For every proposed change, include:
+
+```markdown
+- Target cluster:
+- Config surface:
+- Why this lever:
+- Why this is not benchmark leakage:
+- Why this is safer than a broad text instruction:
+- Regression questions to watch:
+```
+
+## Failure Clustering Before Edits
+
+Cluster valid tuning failures before each candidate edit. Fix shared root causes instead of patching one question at a time.
+
+```markdown
+## Failure Clusters
+
+| Cluster | Affected Qs | Root Cause | Evidence | Repair Lever | Expected Fixes | Regression Risk |
+|---|---:|---|---|---|---:|---|
+| status_value_mapping | 5 | Genie maps active/inactive terms to wrong stored values | generated SQL filters `status = 'A'`; expected uses `status = 'ACTIVE'` | column metadata + entity/value matching | 5 | medium |
+| customer_order_join | 3 | missing stable customer-to-order join | generated SQL cross-joins or omits customer table | join spec | 3 | high |
+```
+
+Repair priority:
+
+1. High-count clusters with one clear structured lever.
+2. Critical/P0 benchmark questions.
+3. Low-regression metadata enrichment.
+4. SQL snippets for reusable logic that metadata cannot express.
+5. Representative example SQL for complex grain, ranking, windows, or multi-step logic.
+6. Text instructions only for global behavior that cannot be encoded structurally.
+
+## Failure-to-Lever Routing
+
+| Failure pattern | Evidence to inspect | Preferred repair lever | Avoid |
+|---|---|---|---|
+| Wrong table/source selected | Generated SQL uses the wrong configured table or metric view | Improve source descriptions, source names/synonyms, and differentiating metadata | Broad text instruction saying "use table X" for one benchmark |
+| Wrong column selected | Correct source, wrong field | Column description, synonyms/business aliases, hide or de-emphasize confusing columns if supported | Example SQL unless the pattern is complex |
+| Wrong Metric View measure | Wrong measure selected or measure intent misunderstood | Metric View display names, descriptions, measure metadata, related dimensions | Duplicating governed measure logic in text instructions |
+| Wrong metric formula outside Metric View | Wrong numerator, denominator, or aggregation | SQL snippet for reusable measure logic; representative example for complex formula | Global text instruction with metric math |
+| Wrong filter value | SQL uses wrong categorical literal or status mapping | Column description with value semantics, entity/value matching, format assistance, reusable filter snippet | Copying benchmark answer filter into example SQL |
+| Missing business filter | Expected SQL has a reusable business filter missing in generated SQL | Reusable filter SQL snippet or concise source/column metadata explaining default business scope | Long instruction list of every filter |
+| Wrong join path | SQL omits or misuses a join | Join spec after validating keys and grain | Join spec based only on column-name similarity |
+| Wrong join relationship/grain | Duplicated rows, wrong counts, many-to-many issue | Join spec with relationship/grain guidance; example SQL for grain-preserving pattern | Blind aggregation workaround |
+| Wrong date field | Uses `created_at` instead of `closed_at`, `effective_date`, etc. | Column descriptions for date roles; snippet for common time filter | Text instruction listing many date rules |
+| Wrong time window | Wrong interval, boundary, fiscal period, or relative date logic | SQL snippet for reusable window; representative example for complex period logic | One-off benchmark-specific example |
+| Wrong aggregation grain | Counts rows instead of entities, averages at wrong level, misses distinct | SQL snippet for reusable grain logic; example SQL for representative complex query | Source description only |
+| Ranking/top-N/window failure | Missing window function, wrong tie-breaker, wrong order | Representative example SQL; reusable snippet if the expression repeats | Many examples pasted into global instruction |
+| Correct SQL, bad answer prose | SQL/results acceptable but final explanation weak | Short response-quality text instruction | Changing SQL surfaces |
+| Syntax failure | Generated SQL invalid | Inspect exact syntax issue; repair snippets/examples only if pattern repeats | Treating syntax failure as business logic failure |
+| Invalid expected SQL | Expected benchmark answer errors or is stale | Benchmark repair outside config tuning | Genie config tuning |
+| Incomplete eval / permissions / API | Eval did not complete or details missing | Infrastructure/access fix | Genie config tuning |
+| Space too broad / asset ambiguity | Failures scatter across many unrelated sources | Source scoping, descriptions, ambiguity reduction, possible Space split recommendation | More global instructions |
+
+## Proactive Enrichment Before Repair
+
+Before proposing a patch, inspect the current Space/config and failing questions for low-risk enrichments:
+
+1. Are source descriptions missing, thin, or indistinguishable?
+2. Are business terms from failed questions absent from source/column descriptions or synonyms?
+3. Are low-cardinality categorical columns causing wrong literal values?
+4. Are status, type, segment, region, channel, or lifecycle values undocumented?
+5. Are date roles ambiguous, such as `created_at` vs `closed_at` vs `effective_date`?
+6. Are repeated joins failing because join specs are missing or unclear?
+7. Are repeated metrics, filters, or time windows better expressed as SQL snippets?
+8. Is a representative example needed for complex grain, ranking, window, or period logic?
+9. Is text instruction being used as a dumping ground for logic that belongs in metadata, snippets, examples, or joins?
+10. Is the Space backed by Metric Views, and should the repair target Metric View metadata rather than raw table logic?
+11. Are there too many data sources in one Space, causing routing confusion?
+
+## Text Instruction Last-Resort Rule
+
+Do not use text instructions as the default repair. If the proposed instruction names specific tables, metric views, columns, joins, filters, denominators, numerators, aliases, ranking logic, or window logic, first try to encode the rule in source/column metadata, entity/value matching, format assistance, join specs, SQL snippets, or representative example SQL.
+
+Use text instructions only for global behavior that cannot be encoded structurally. Each text instruction edit must include:
+
+```markdown
+## Text Instruction Justification
+
+- Exact instruction text:
+- Why structured surfaces were insufficient:
+- Which failures this targets:
+- Which regressions this could cause:
+- How the candidate eval will validate it:
+```
+
+## Iteration Reflection Template
+
+After each candidate eval, append this reflection to the fix plan before starting another repair pass:
+
+```markdown
+## Iteration Reflection
+
+- Candidate version:
+- Target cluster:
+- Lever attempted:
+- Result:
+- Fixed question IDs:
+- Regressed question IDs:
+- Still failing question IDs:
+- Root cause update:
+- Do not repeat:
+- Next repair hypothesis:
+```
+
 ## Serialized Config Mapping
 
 Use these serialized-space areas for quality changes:
