@@ -28,6 +28,25 @@ Before tuning, review whether the benchmark is useful:
 
 If benchmark quality is insufficient, do a dedicated benchmark repair pass first. Do not mix benchmark repair with Genie tuning.
 
+## Benchmark Repair
+
+Use benchmark repair when fewer than 30 valid Q/A pairs remain, expected SQL is invalid or stale, answers are missing, questions are duplicate or trivial, or coverage is too narrow for benchmark-driven tuning.
+
+A valid benchmark pair has one current, non-trivial question and one checked SQL answer. The SQL should match the current schema and business definition, run successfully or have read-only validation evidence, and avoid depending on obsolete tables, columns, filters, or Metric View assumptions.
+
+Before changing benchmark definitions, get user approval and keep the pass limited to benchmark definitions. Do not mix benchmark repair with Genie tuning.
+
+For each added or replaced benchmark Q/A pair, record:
+
+- question text;
+- expected SQL;
+- coverage category, such as source routing, Metric View measure, filter, join, time logic, ranking, aggregation grain, or answer shape;
+- referenced tables, Metric Views, and columns;
+- read-only SQL validation notes where practical;
+- whether it adds coverage or replaces an invalid, stale, duplicate, or trivial question.
+
+Repair enough benchmark Q/A pairs to reach at least 30 valid pairs. After benchmark repair, run a full native benchmark evaluation, wait for completed per-question output, and use that result as the new baseline before starting Genie tuning.
+
 ## Repair Decision Stack
 
 Before applying a Space/config edit, answer:
