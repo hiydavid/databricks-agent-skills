@@ -23,14 +23,25 @@ Before tuning, review whether the benchmark is useful:
 - At least 30 valid question and SQL-answer pairs for benchmark-driven tuning.
 - One checked SQL answer per benchmark question.
 - Coverage across source selection, Metric View measures, dimensions, filters, joins, date logic, ranking, aggregation grain, and answer shapes.
+- A meaningful challenge mix. A benchmark dominated by easy questions is insufficient for tuning even when it has 30 valid Q/A pairs.
 - No duplicates that only change a category or date.
 - No answer SQL that errors, uses stale fields, or encodes the wrong business definition.
 
 If benchmark quality is insufficient, do a dedicated benchmark repair pass first. Do not mix benchmark repair with Genie tuning.
 
+## Benchmark Difficulty
+
+Use this light rubric when reviewing or repairing benchmark questions:
+
+- Easy: direct lookup, simple count, single-table filter, or no business logic.
+- Medium: reusable metric/filter, categorical mapping, date condition, grouping, basic aggregation, or Metric View measure selection.
+- Hard: joins, grain handling, ratios, conditional aggregation, ranking/top-N, rolling/window logic, multi-step business logic, or result-shape constraints.
+
+Prefer a meaningful mix of medium and hard questions. Flag benchmarks as too easy when they are dominated by trivial counts/lookups, repeated one-table summaries, or variants that only swap a date/category.
+
 ## Benchmark Repair
 
-Use benchmark repair when fewer than 30 valid Q/A pairs remain, expected SQL is invalid or stale, answers are missing, questions are duplicate or trivial, or coverage is too narrow for benchmark-driven tuning.
+Use benchmark repair when fewer than 30 valid Q/A pairs remain, expected SQL is invalid or stale, answers are missing, questions are duplicate or trivial, the benchmark is too easy, or coverage is too narrow for benchmark-driven tuning.
 
 A valid benchmark pair has one current, non-trivial question and one checked SQL answer. The SQL should match the current schema and business definition, run successfully or have read-only validation evidence, and avoid depending on obsolete tables, columns, filters, or Metric View assumptions.
 
@@ -40,6 +51,7 @@ For each added or replaced benchmark Q/A pair, record:
 
 - question text;
 - expected SQL;
+- difficulty level;
 - coverage category, such as source routing, Metric View measure, filter, join, time logic, ranking, aggregation grain, or answer shape;
 - referenced tables, Metric Views, and columns;
 - read-only SQL validation notes where practical;

@@ -27,8 +27,8 @@ Improve a Genie Space iteratively inside Databricks. Use Genie Code Agent mode t
 2. Review benchmark quality before tuning:
    - count valid question and SQL-answer pairs
    - exclude missing, invalid, duplicated, trivial, or stale ground truth
-   - check coverage across sources, metrics, filters, joins, time logic, ranking, and answer shapes
-   - if fewer than 30 valid pairs remain, perform or recommend a dedicated benchmark repair pass before tuning
+   - check coverage and challenge level across sources, metrics, filters, joins, time logic, ranking, and answer shapes
+   - if fewer than 30 valid pairs remain or the benchmark is dominated by trivial/easy questions, perform or recommend a dedicated benchmark repair pass before tuning
 3. For benchmark repair, get approval before changing benchmark definitions, repair only benchmark definitions, validate expected SQL with read-only SQL where practical, run a full native benchmark evaluation, and use the completed output as the new baseline.
 4. Establish baseline behavior from the latest completed benchmark evaluation or run a native evaluation after user approval.
 5. If the optimization will span multiple passes or needs auditable history, confirm an approved Unity Catalog catalog/schema for optimization history and initialize or reuse the table set described in `references/optimization-guide.md`.
