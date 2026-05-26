@@ -91,6 +91,12 @@ Workspace/.assistant/skills/
 
 For example, copy `genie-code/create-genie-space`, `genie-code/diagnose-genie-space`, or `genie-code/optimize-genie-space` into one of those `.assistant/skills/` locations. Genie Code automatically discovers skills in Agent mode. See the [Databricks Genie Code skills docs](https://docs.databricks.com/aws/en/genie-code/skills) for details.
 
+Example prompt for iterative Genie Space optimization:
+
+```text
+use @optimize-genie-space skill and optimize my genie space, id: <INSERT_GENIE_ID> . Iterate until you reach or exceeds 90% in benchmark accuracy. Stop when you reach the goal.
+```
+
 ## Development
 
 ### Project structure
