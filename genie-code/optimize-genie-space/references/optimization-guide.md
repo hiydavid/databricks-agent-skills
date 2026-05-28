@@ -14,18 +14,22 @@ Translate failed benchmark evidence into structured Genie context. Prefer this o
 6. Representative example SQL for complex patterns.
 7. Short global text instructions.
 
-Benchmarks evaluate quality. They do not teach Genie by themselves. Do not copy benchmark questions or answer SQL into sample questions, snippets, examples, or text instructions.
+Benchmarks evaluate quality. They do not teach Genie by themselves. Do not copy benchmark questions, answer SQL, or evaluation-note wording into sample questions, snippets, examples, or text instructions.
 
 ## Benchmark Integrity
 
 Before tuning, review whether the benchmark is useful:
 
-- At least 30 valid question and SQL-answer pairs for benchmark-driven tuning.
-- One checked SQL answer per benchmark question.
-- Coverage across source selection, Metric View measures, dimensions, filters, joins, date logic, ranking, aggregation grain, and answer shapes.
-- A meaningful challenge mix. A benchmark dominated by easy questions is insufficient for tuning even when it has 30 valid Q/A pairs.
+- Identify the target benchmark execution mode: Chat, Agent, or mixed. Benchmark records are shared definitions; execution mode controls whether Databricks scores SQL/result-set match or whole-response quality.
+- At least 30 valid benchmark items for the target execution mode before benchmark-driven tuning.
+- Chat execution needs deterministic questions with checked SQL answers.
+- Agent execution needs clear questions and evaluation notes when the expected response needs grading guidance.
+- Mixed execution should use one shared benchmark set with per-question SQL answers, evaluation notes, or both, based on answer shape.
+- Coverage across source selection, Metric View measures, dimensions, filters, joins, date logic, ranking, aggregation grain, answer shapes, and Agent response quality when applicable.
+- A meaningful challenge mix. A benchmark dominated by easy questions is insufficient for tuning even when it has 30 valid benchmark items.
 - No duplicates that only change a category or date.
 - No answer SQL that errors, uses stale fields, or encodes the wrong business definition.
+- No Agent evaluation note that is vague, contradictory, or asks the judge to reward unsupported claims.
 
 If benchmark quality is insufficient, do a dedicated benchmark repair pass first. Do not mix benchmark repair with Genie tuning.
 
@@ -35,42 +39,52 @@ Use this light rubric when reviewing or repairing benchmark questions:
 
 - Easy: direct lookup, simple count, single-table filter, or no business logic.
 - Medium: reusable metric/filter, categorical mapping, date condition, grouping, basic aggregation, or Metric View measure selection.
-- Hard: joins, grain handling, ratios, conditional aggregation, ranking/top-N, rolling/window logic, multi-step business logic, or result-shape constraints.
+- Hard: joins, grain handling, ratios, conditional aggregation, ranking/top-N, rolling/window logic, multi-step business logic, result-shape constraints, or Agent-style synthesis across several supporting queries.
 
 Prefer a meaningful mix of medium and hard questions. Flag benchmarks as too easy when they are dominated by trivial counts/lookups, repeated one-table summaries, or variants that only swap a date/category.
 
 ## Benchmark Repair
 
-Use benchmark repair when fewer than 30 valid Q/A pairs remain, expected SQL is invalid or stale, answers are missing, questions are duplicate or trivial, the benchmark is too easy, or coverage is too narrow for benchmark-driven tuning.
+Use benchmark repair when fewer than 30 valid benchmark items remain for the target execution mode, expected SQL is invalid or stale, evaluation notes are missing or unclear for Agent-style questions, questions are duplicate or trivial, the benchmark is too easy, or coverage is too narrow for benchmark-driven tuning.
 
-A valid benchmark pair has one current, non-trivial question and one checked SQL answer. The SQL should match the current schema and business definition, run successfully or have read-only validation evidence, and avoid depending on obsolete tables, columns, filters, or Metric View assumptions.
+A valid benchmark item has a current, non-trivial question plus enough ground truth for the intended execution mode:
+
+- `single_sql_answer`: add a checked SQL answer for deterministic tabular questions.
+- `deterministic_with_response_quality`: add checked SQL and an evaluation note when Chat correctness and Agent response quality both matter.
+- `multi_step_agent_analysis`: add an evaluation note only when the question requires multiple investigative queries, synthesis, caveats, citations, visualizations, or supporting tables rather than one canonical result set.
+- `ambiguous_or_unverifiable`: ask the user for expected behavior before adding or repairing the item.
+
+Checked SQL should match the current schema and business definition, run successfully or have read-only validation evidence, and avoid obsolete tables, columns, filters, or Metric View assumptions. Evaluation notes should state the expected content, evidence, caveats, and response-quality criteria without prescribing a hidden one-off answer.
 
 Before changing benchmark definitions, get user approval and keep the pass limited to benchmark definitions. Do not mix benchmark repair with Genie tuning.
 
-For each added or replaced benchmark Q/A pair, record:
+For each added or replaced benchmark item, record:
 
 - question text;
-- expected SQL;
+- benchmark field strategy: SQL, evaluation note, both, or excluded;
+- expected SQL and validation notes, when SQL is appropriate;
+- evaluation note, when Agent execution needs response-grading guidance;
 - difficulty level;
-- coverage category, such as source routing, Metric View measure, filter, join, time logic, ranking, aggregation grain, or answer shape;
+- coverage category, such as source routing, Metric View measure, filter, join, time logic, ranking, aggregation grain, answer shape, multi-query investigation, evidence quality, or response synthesis;
 - referenced tables, Metric Views, and columns;
-- read-only SQL validation notes where practical;
 - whether it adds coverage or replaces an invalid, stale, duplicate, or trivial question.
 
-Repair enough benchmark Q/A pairs to reach at least 30 valid pairs. After benchmark repair, run a full native benchmark evaluation, wait for completed per-question output, and use that result as the new baseline before starting Genie tuning.
+Repair enough benchmark items to reach at least 30 valid items for the target execution mode. After benchmark repair, run the relevant native benchmark evaluation, wait for completed per-question output, and use that result as the new baseline before starting Genie tuning.
 
 ## Repair Decision Stack
 
 Before applying a Space/config edit, answer:
 
 1. Is this a valid tuning failure?
-   - Exclude invalid expected SQL, stale benchmark questions, permissions, warehouse/API failures, and incomplete eval output.
+   - Exclude invalid expected SQL, unclear evaluation notes, stale benchmark questions, permissions, warehouse/API failures, and incomplete eval output.
+   - Record whether the result came from Chat execution, Agent execution, or a mixed run.
 2. What changed in the generated SQL or answer?
-   - Wrong source, wrong column, wrong join, wrong filter value, missing filter, wrong aggregation, wrong time logic, wrong metric formula, wrong grain, missing output field, syntax failure, or answer-prose issue.
+   - Chat: wrong source, wrong column, wrong join, wrong filter value, missing filter, wrong aggregation, wrong time logic, wrong metric formula, wrong grain, missing output field, syntax failure, or answer-prose issue.
+   - Agent: weak research plan, missing hypothesis, insufficient supporting queries, wrong source selection, incomplete evidence, unsupported claim, missing citation/table/chart, poor synthesis, missing caveat, or unclear final report.
 3. What is the smallest repair lever?
    - Source/column metadata, Metric View metadata, entity/value matching, format assistance, join spec, SQL snippet, representative example SQL, or text instruction.
 4. Is there a proactive enrichment that would help multiple failures?
-   - Missing descriptions, synonyms, categorical value semantics, date-role descriptions, reusable filters/measures, join specs, examples for complex grain/ranking/window logic.
+   - Missing descriptions, synonyms, categorical value semantics, date-role descriptions, reusable filters/measures, join specs, examples for complex grain/ranking/window logic, or response-quality guidance for Agent reports.
 5. What slice proves the repair?
    - Identify affected benchmark question IDs and related previous-good regression questions.
 6. What should be recorded for the next loop?
@@ -80,7 +94,7 @@ Every tuning pass must name the target failure cluster and repair lever before e
 
 ## Judge-Style Failure Triage
 
-Use judge-style analysis as a mental model only. Do not implement custom judges. For each `BAD` or `NEEDS_REVIEW` question, inspect generated SQL, expected SQL, actual results, and assessment notes when available.
+Use judge-style analysis as a mental model only. Do not implement custom judges. For each `BAD` or `NEEDS_REVIEW` question, inspect the evidence available for the execution mode. For Chat execution, inspect generated SQL, expected SQL, actual results, and assessment notes. For Agent execution, inspect the full response, research steps, supporting query outputs, citations, visualizations, evaluation note, and assessment notes.
 
 Classify failures across these dimensions:
 
@@ -90,22 +104,25 @@ Classify failures across these dimensions:
 - `logical_accuracy`: Did filters, joins, aggregations, dates, windows, ranking, and grain match intent?
 - `completeness`: Did the response answer all required parts?
 - `syntax_validity`: Did generated SQL run?
-- `response_quality`: Was the final explanation/presentation acceptable when SQL was otherwise correct?
-- `benchmark_validity`: Is the expected answer itself valid and current?
+- `agent_investigation_quality`: Did Agent mode form a useful plan, run enough relevant queries, adapt to findings, and gather enough evidence?
+- `response_quality`: Was the final explanation, report structure, citation support, table/chart use, and caveat handling acceptable?
+- `benchmark_validity`: Is the expected SQL valid and current, and is the evaluation note clear enough for Agent-mode judging?
 - `infra_validity`: Was the eval complete and free of platform/access failures?
 
 ```markdown
 ## Repair Triage
 
-| Question ID | Assessment | Valid tuning failure? | Primary failure | Evidence | Recommended lever |
-|---|---|---:|---|---|---|
-| q_001 | BAD | yes | wrong_filter_value | generated SQL uses wrong status literal | entity/value matching + column metadata |
-| q_002 | BAD | no | invalid_expected_sql | expected SQL references removed column | benchmark repair, not config tuning |
+| Question ID | Execution | Assessment | Valid tuning failure? | Primary failure | Evidence | Recommended lever |
+|---|---|---|---:|---|---|---|
+| q_001 | Chat | BAD | yes | wrong_filter_value | generated SQL uses wrong status literal | entity/value matching + column metadata |
+| q_002 | Chat | BAD | no | invalid_expected_sql | expected SQL references removed column | benchmark repair, not config tuning |
+| q_003 | Agent | BAD | yes | incomplete_evidence | report names drivers but cites only one aggregate query | source descriptions + representative example pattern |
 ```
 
 Rules:
 
 - Do not count invalid benchmark or infra failures as Genie repair targets.
+- Do not treat an Agent-mode failure as a SQL-match failure unless the eval evidence shows the response was wrong because of a single incorrect query.
 - Triage `NEEDS_REVIEW` separately from `BAD`.
 - Do not infer root cause from aggregate accuracy alone.
 - Use `unknown` or `manual_review` when evidence is insufficient.
@@ -117,10 +134,11 @@ Cluster valid tuning failures before each candidate edit. Prefer one failure clu
 ```markdown
 ## Failure Clusters
 
-| Cluster | Question IDs | Shared root cause | Evidence from generated SQL | Proposed lever | Regression questions |
+| Cluster | Question IDs | Shared root cause | Evidence | Proposed lever | Regression questions |
 |---|---|---|---|---|---|
 | status_value_mapping | q_001, q_004 | Genie maps active/inactive terms to wrong stored values | generated SQL filters `status = 'A'`; expected uses `status = 'ACTIVE'` | column metadata + entity/value matching | q_008, q_011 |
 | customer_order_join | q_002, q_006 | missing stable customer-to-order join | generated SQL cross-joins or omits customer table | join spec | q_014 |
+| revenue_driver_synthesis | q_009, q_012 | Agent report summarizes decline without segment-level evidence | final report lacks cited product or region breakdown queries | source descriptions + representative example pattern | q_016 |
 ```
 
 Repair priority:
@@ -149,6 +167,10 @@ Repair priority:
 | Wrong aggregation grain | Counts rows instead of entities, averages at wrong level, misses distinct | SQL snippet for reusable grain logic; example SQL for representative complex query | Source description only |
 | Ranking/top-N/window failure | Missing window function, wrong tie-breaker, wrong order | Representative example SQL; reusable snippet if the expression repeats | Many examples pasted into global instruction |
 | Correct SQL, bad answer prose | SQL/results acceptable but final explanation weak | Short response-quality text instruction | Changing SQL surfaces |
+| Weak Agent research plan | Agent response starts from a vague or narrow plan and misses obvious comparison axes | Source descriptions, Metric View descriptions, and representative examples that show useful analytic dimensions | Long text instruction that scripts every benchmark |
+| Incomplete Agent evidence | Final report makes claims without enough supporting query results, citations, tables, or charts | Clarify source/metric semantics; add representative example SQL only for reusable investigative patterns | Adding a single SQL answer for a multi-step analysis question |
+| Unsupported Agent synthesis | Report overstates causality, misses caveats, or ignores data limitations | Short global response-quality instruction when the behavior is truly global | Encoding one benchmark's final prose as an instruction |
+| Unclear Agent benchmark rubric | LLM judge lacks enough criteria to assess the report | Benchmark repair: add or refine evaluation note | Genie config tuning |
 | Syntax failure | Generated SQL invalid | Inspect exact syntax issue; repair snippets/examples only if pattern repeats | Treating syntax failure as business logic failure |
 | Invalid expected SQL | Expected benchmark answer errors or is stale | Benchmark repair outside config tuning | Genie config tuning |
 | Incomplete eval / permissions / API | Eval did not complete or details missing | Infrastructure/access fix | Genie config tuning |
@@ -166,9 +188,10 @@ Before proposing a patch, inspect the current Space/config and failing questions
 6. Are repeated joins failing because join specs are missing or unclear?
 7. Are repeated metrics, filters, or time windows better expressed as SQL snippets?
 8. Is a representative example needed for complex grain, ranking, window, or period logic?
-9. Is text instruction being used as a dumping ground for logic that belongs in metadata, snippets, examples, or joins?
-10. Is the Space backed by Metric Views, and should the repair target Metric View metadata rather than raw table logic?
-11. Are there too many data sources in one Space, causing routing confusion?
+9. Do Agent-mode failures show missing investigation dimensions, weak evidence collection, unsupported synthesis, or missing caveats?
+10. Is text instruction being used as a dumping ground for logic that belongs in metadata, snippets, examples, or joins?
+11. Is the Space backed by Metric Views, and should the repair target Metric View metadata rather than raw table logic?
+12. Are there too many data sources in one Space, causing routing confusion?
 
 ## Text Instruction Last-Resort Rule
 
@@ -203,7 +226,7 @@ Gate 2: related regression slice
 
 Gate 3: full benchmark
 
-- Run the complete benchmark after the targeted and regression checks look acceptable, or when targeted evaluation is unavailable or not representative.
+- Run the complete relevant benchmark after the targeted and regression checks look acceptable, or when targeted evaluation is unavailable or not representative. For mixed execution goals, compare Chat and Agent runs separately instead of collapsing them into one score.
 
 Compare question-level movement:
 
@@ -225,8 +248,11 @@ After comparing reports, add an explicit keep/revise/rollback decision:
 - Baseline report:
 - Candidate report:
 - Candidate config or Space version:
+- Benchmark execution target:
+- Benchmark field strategy:
 - Valid denominator used:
-- Accuracy delta:
+- Chat accuracy delta, if run:
+- Agent assessment delta, if run:
 - Fixed:
 - Regressed:
 - Unchanged target failures:
@@ -238,7 +264,7 @@ After comparing reports, add an explicit keep/revise/rollback decision:
 - Rollback action, if needed:
 ```
 
-Keep the candidate only when it improves valid benchmark accuracy or fixes the target cluster without unacceptable regressions. Roll back or revise when the candidate only shifts failures, creates new syntax/infra issues, or depends on benchmark leakage.
+Keep the candidate only when it improves the valid benchmark score or fixes the target cluster without unacceptable regressions. Roll back or revise when the candidate only shifts failures, creates new syntax/infra issues, or depends on benchmark leakage.
 
 ## Iteration Reflection
 
@@ -267,16 +293,18 @@ Use this template for each candidate pass:
 ## Genie Repair Plan
 
 ### Validity exclusions
-- Invalid expected SQL or stale benchmark questions:
+- Benchmark execution target:
+- Benchmark field strategy:
+- Invalid expected SQL, unclear evaluation notes, or stale benchmark questions:
 - Permissions, platform, warehouse, or incomplete-eval issues:
 - Questions excluded from tuning denominator:
 
 ### Failure triage
-| Question ID | Assessment | Valid tuning failure? | Primary failure | Evidence | Recommended lever |
-|---|---|---:|---|---|---|
+| Question ID | Execution | Assessment | Valid tuning failure? | Primary failure | Evidence | Recommended lever |
+|---|---|---|---:|---|---|---|
 
 ### Failure clusters
-| Cluster | Question IDs | Shared root cause | Evidence from generated SQL | Proposed lever | Regression questions |
+| Cluster | Question IDs | Shared root cause | Evidence | Proposed lever | Regression questions |
 |---|---|---|---|---|---|
 
 ### Candidate edit
@@ -300,6 +328,8 @@ Use this template for each candidate pass:
 - Full benchmark required? Why/why not:
 
 ### Acceptance decision
+- Chat accuracy delta, if run:
+- Agent assessment delta, if run:
 - Fixed:
 - Regressed:
 - Still failing:
@@ -357,9 +387,9 @@ iteration_reflection
 
 Recommended stable columns:
 
-- `genie_opt_runs`: `run_id`, `session_id`, `space_id`, `space_name`, `agent_variant`, `benchmark_id`, `benchmark_version_or_hash`, `iteration`, `parent_run_id`, `baseline_config_version_id`, `candidate_config_version_id`, `target_cluster`, `repair_lever`, `status`, `started_at`, `ended_at`, `baseline_accuracy`, `candidate_accuracy`, `accuracy_delta`, `fixed_count`, `regressed_count`, `unchanged_bad_count`, `unchanged_good_count`, `excluded_count`, `decision`, `notes`.
+- `genie_opt_runs`: `run_id`, `session_id`, `space_id`, `space_name`, `benchmark_execution_target`, `benchmark_id`, `benchmark_version_or_hash`, `iteration`, `parent_run_id`, `baseline_config_version_id`, `candidate_config_version_id`, `target_cluster`, `repair_lever`, `status`, `started_at`, `ended_at`, `baseline_score`, `candidate_score`, `score_delta`, `fixed_count`, `regressed_count`, `unchanged_bad_count`, `unchanged_good_count`, `excluded_count`, `decision`, `notes`.
 - `genie_opt_config_versions`: `config_version_id`, `run_id`, `space_id`, `version_label`, `parent_config_version_id`, `captured_at`, `captured_by`, `config_hash`, `config_json`, `changed_surfaces`, `change_summary`.
-- `genie_opt_eval_results`: `eval_result_id`, `eval_run_id`, `run_id`, `space_id`, `benchmark_id`, `benchmark_version_or_hash`, `eval_type`, `evaluated_at`, `question_id`, `question_text`, `assessment`, `valid_tuning_failure`, `exclusion_reason`, `primary_failure`, `secondary_signal`, `failure_cluster`, `expected_sql_hash`, `generated_sql_hash`, `generated_sql`, `expected_result_digest`, `actual_result_digest`, `judge_notes`, `latency_ms`, `error_message`.
+- `genie_opt_eval_results`: `eval_result_id`, `eval_run_id`, `run_id`, `space_id`, `benchmark_id`, `benchmark_version_or_hash`, `eval_type`, `evaluated_at`, `question_id`, `question_text`, `benchmark_field_strategy`, `assessment`, `valid_tuning_failure`, `exclusion_reason`, `primary_failure`, `secondary_signal`, `failure_cluster`, `expected_sql_hash`, `generated_sql_hash`, `generated_sql`, `evaluation_note_hash`, `expected_result_digest`, `actual_result_digest`, `judge_notes`, `latency_ms`, `error_message`.
 - `genie_opt_repair_analysis`: `analysis_id`, `run_id`, `space_id`, `created_at`, `cluster_id`, `affected_question_ids`, `root_cause`, `evidence_summary`, `selected_lever`, `rejected_levers`, `config_surface`, `planned_patch_summary`, `expected_fix_count`, `regression_risk`, `benchmark_leakage_check`, `acceptance_decision`, `reflection`, `next_hypothesis`.
 - `genie_opt_events`: `event_id`, `event_ts`, `event_type`, `session_id`, `run_id`, `space_id`, `config_version_id`, `eval_run_id`, `question_id`, `payload_json`.
 

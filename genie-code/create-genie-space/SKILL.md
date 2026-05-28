@@ -1,6 +1,6 @@
 ---
 name: create-genie-space
-description: "Create or refine a Databricks Genie Space from Unity Catalog tables, views, and Metric Views in Databricks Genie Code Agent mode. Use inside Databricks when users ask Genie Code to build, bootstrap, configure, or review a Genie Space, inspect workspace data context, choose focused data sources, design instructions, examples, sample questions, and benchmarks, or prepare safe Space changes without source data mutation."
+description: "Create or refine a Databricks Genie Space from Unity Catalog tables, views, and Metric Views in Databricks Genie Code Agent mode. Use inside Databricks when users ask Genie Code to build, bootstrap, configure, or review a Genie Space, inspect workspace data context, choose focused data sources, design instructions, examples, sample questions, Chat or Agent benchmarks, or prepare safe Space changes without source data mutation."
 ---
 
 # Create Genie Space For Genie Code
@@ -15,10 +15,11 @@ Create a focused Genie Space using Databricks-native context. Rely on Genie Code
 - Do not create or update a live Genie Space unless the user explicitly asks and approves the proposed changes in Databricks.
 - Do not invent business definitions, joins, fiscal calendars, default filters, or metric formulas. Ask the user when workspace evidence is insufficient.
 - Do not add benchmark SQL unless it has been checked with read-only execution or `EXPLAIN`.
+- Do not add Agent-style benchmark evaluation notes unless the expected response criteria are grounded in user intent, workspace evidence, or validated business definitions.
 
 ## Workflow
 
-1. Clarify the minimum scope: target catalog/schema or provided `@` assets, selected tables/views/Metric Views, audience, Space purpose, and whether the user wants a draft design or approved live change.
+1. Clarify the minimum scope: target catalog/schema or provided `@` assets, selected tables/views/Metric Views, audience, Space purpose, intended benchmark execution target when benchmarks are requested, and whether the user wants a draft design or approved live change.
 2. Inspect the workspace context. Use Unity Catalog metadata, attached assets, and bounded SQL to identify source purpose, comments, columns, data types, grain, date fields, categorical values, measures, sensitive/noisy fields, and likely relationships.
 3. For Metric Views, inspect their available measures, dimensions, filters, joins, time dimensions, comments, display names, synonyms, and formatting before adding extra Genie context. Prefer governed Metric View semantics over duplicated SQL logic.
 4. Design the Genie Space surfaces:
@@ -29,7 +30,7 @@ Create a focused Genie Space using Databricks-native context. Rely on Genie Code
    - joins: add standard raw-table relationships only when evidence or user confirmation supports them
    - snippets/examples: add reusable business logic and representative complex patterns only after metadata is insufficient
    - text instructions: keep global and short
-   - sample questions and benchmarks: cover realistic user workflows without teaching from benchmark answers
+   - sample questions and benchmarks: cover realistic user workflows without teaching from benchmark answers. For benchmarks, choose SQL answers, evaluation notes, or both based on answer shape and intended execution mode.
 5. Review the draft against `references/space-design-guide.md` before proposing live changes.
 6. Present the proposed Space configuration in the Databricks-native editor or chat output for user review. Apply only after the user approves.
 
@@ -40,5 +41,6 @@ Provide:
 - The Genie Space title or draft title.
 - The data sources included and why each belongs.
 - Important metadata, prompt matching, join, snippet, example, sample question, and benchmark choices.
+- Benchmark execution target and field strategy when benchmarks are included.
 - Any assumptions or user confirmations needed before live creation or update.
 - The read-only validation performed and any limitations.

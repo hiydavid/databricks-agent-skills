@@ -1,6 +1,6 @@
 ---
 name: diagnose-genie-space
-description: "Diagnose Databricks Genie Space quality issues in Databricks Genie Code Agent mode. Use inside Databricks when users ask why a Genie Space gives wrong SQL, wrong answers, inconsistent answers, source-selection errors, metric, dimension, filter, join, time logic, benchmark, or instruction problems, or when they need a plan-only health check before tuning."
+description: "Diagnose Databricks Genie Space quality issues in Databricks Genie Code Agent mode. Use inside Databricks when users ask why a Genie Space gives wrong SQL, wrong answers, inconsistent answers, weak Agent-mode reports, source-selection errors, metric, dimension, filter, join, time logic, benchmark, or instruction problems, or when they need a plan-only health check before tuning."
 ---
 
 # Diagnose Genie Space For Genie Code
@@ -20,8 +20,9 @@ Diagnose Genie Space quality without making changes. Use Genie Code Agent mode t
    - Space name or identifier
    - failing question, if any
    - observed bad behavior
-   - expected answer, SQL, or business rule
-   - generated SQL or error text, if available
+   - expected answer, SQL, evaluation note, or business rule
+   - generated SQL, final response, Agent research evidence, or error text, if available
+   - whether the issue came from Chat benchmark execution, Agent benchmark execution, or ad hoc use
    - whether the failure is intermittent or repeatable
 2. Inspect the Space context:
    - attached tables, views, Metric Views, measures, dimensions, filters, and descriptions
@@ -61,6 +62,7 @@ Use this shape:
 ## Health Check
 - Ready for tuning:
 - Benchmark concerns:
+- Benchmark execution target:
 - Highest-risk static issues:
 ```
 
