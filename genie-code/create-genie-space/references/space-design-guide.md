@@ -76,4 +76,4 @@ Check the draft for:
 - Joins supported by constraints, naming, row-count checks, or user confirmation.
 - No long rulebook-style text instructions.
 - Example SQL that teaches reusable patterns, not memorized test questions.
-- Benchmarks with one checked SQL answer each and coverage across sources, filters, measures, joins, time logic, and answer shapes.
+- Benchmarks with ground truth appropriate to the intended execution mode: checked SQL for deterministic Chat-style questions, evaluation notes for Agent-style multi-step analysis, and both when a deterministic question also needs full-response judging. Cover sources, filters, measures, joins, time logic, answer shapes, evidence quality, and response synthesis as applicable.
