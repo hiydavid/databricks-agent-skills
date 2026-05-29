@@ -25,6 +25,8 @@ When recommending fixes, route them to the most structured Genie config surface 
 
 **Version detection:** First check `serialized_space.version`. If `2`, use v2 field names (`enable_format_assistance`, `enable_entity_matching`). If `1`, use v1 field names (`get_example_values`, `build_value_dictionary`). Do not mix v1 and v2 fields — v2 spaces reject v1 fields and vice versa.
 
+**Readiness evidence:** For new spaces, confirm the author performed a requirements-driven readiness check. The space should be traceable back to 3-5 real business questions, with unsupported questions either resolved or documented as assumptions/limitations.
+
 ---
 
 ## Data Sources
@@ -41,6 +43,11 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Check: Whether tables, views, and Metric Views appear relevant to the space's stated purpose (`title`, `description`)
 - Why: Including unnecessary data objects adds noise and confuses Genie's source selection.
 - Warning if: Data objects seem unrelated to the space's purpose
+
+**Business Question Coverage**
+- Check: Whether sample questions, examples, benchmarks, snippets, and joins cover the user's stated business questions
+- Why: A space can pass structural validation while still failing the user's actual goals
+- Warning if: One or more stated questions lack supporting source fields, Metric View measures, joins, examples, or benchmarks
 
 ### Tables And Standard Views
 
@@ -130,7 +137,13 @@ When recommending fixes, route them to the most structured Genie config surface 
 **Instructions Are Focused and Minimal**
 - Check: Length and content of text instructions
 - Why: Overly long or verbose instructions dilute their impact. Instructions should be concise directives, not documentation. SQL examples, metrics, and join logic belong in their respective sections.
-- Warning if: Instructions are excessively long (>500 words total) or contain embedded SQL
+- Warning if: Instructions are excessively long (>2,000 characters or >500 words total) or contain embedded SQL
+
+**Canonical GSL Sections**
+- Check: `instructions.text_instructions[].content`
+- Why: The Create, Fix, and Optimize workflows need a consistent text-instruction schema
+- Warning if: Text instructions do not use canonical Markdown sections in this order: `## PURPOSE`, `## DISAMBIGUATION`, `## DATA QUALITY NOTES`, `## CONSTRAINTS`, `## Instructions you must follow when providing summaries`
+- NA if: No text instruction is needed
 
 **Business Jargon Mapped**
 - Check: Whether domain-specific terms are mapped in Metric View agent metadata, table/column descriptions, synonyms, SQL snippets, example SQLs, SQL functions, or global text instructions
@@ -166,6 +179,12 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Why: Parameter descriptions help Genie understand what values to substitute.
 - Fail if: Parameters exist without descriptions
 - NA if: No parameters are used
+
+**Parameters Have Real Defaults**
+- Check: `instructions.example_question_sqls[].parameters[].default_value`
+- Why: Parameterized examples should be tested with real profiled values, and fake defaults produce empty or misleading examples
+- Fail if: SQL contains `:param_name` placeholders without matching parameter metadata and real defaults
+- Warning if: Defaults look like placeholders rather than values observed during profiling
 
 **Complex Examples Have Usage Guidance**
 - Check: `instructions.example_question_sqls[].usage_guidance` on complex examples
@@ -225,6 +244,32 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Check: Each benchmark question has exactly one `answer` with `format: "SQL"`
 - Why: Benchmark evals and accuracy comparison require stable SQL ground truth
 - Fail if: Any benchmark question has no SQL answer, multiple answers, or a non-SQL answer
+
+**Benchmark Values Are Real And Concrete**
+- Check: Benchmark SQL literals and execution evidence
+- Why: Benchmarks with invented filter values often execute successfully but return zero rows, creating weak or misleading evals
+- Warning if: Benchmark SQL uses placeholders, fake values, or values not found during profiling
+- Warning if: A benchmark query returns zero rows and the question is not explicitly about absence of data
+
+**No Benchmark Leakage**
+- Check: Sample questions and example SQLs compared with benchmark questions and benchmark answer SQL
+- Why: Benchmarks should evaluate generalization, not teach the exact answer through examples
+- Fail if: Example SQL copies benchmark answer SQL or benchmark question text
+- Warning if: Sample questions duplicate benchmark questions verbatim
+
+---
+
+## Limits And Scale
+
+**Instruction Count**
+- Check: Count `text_instructions`, `example_question_sqls`, `sql_functions`, `join_specs`, and all SQL snippet entries
+- Why: Genie instruction surfaces have practical/API limits and large instruction stores dilute prompt context
+- Warning if: Total instruction objects exceed 100
+
+**Prompt Matching Count**
+- Check: Number of columns with v2 `enable_entity_matching: true`
+- Why: Entity matching is most useful on a focused set of categorical columns and has platform limits
+- Warning if: Entity matching is enabled for more than 120 columns, or broadly enabled on IDs, timestamps, numeric measures, or high-cardinality free text
 
 ---
 

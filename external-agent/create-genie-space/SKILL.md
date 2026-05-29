@@ -19,25 +19,28 @@ Create a new Databricks Genie Space configuration from selected Unity Catalog da
 
 ## Workflow
 
-1. **Collect scope.** Ask for the catalog, schema, and selected data object names if missing. Capture whether each object is a table/view or Metric View. Also ask for the space purpose/audience and whether the user wants JSON only or an API create payload. If creating a payload, collect `title`, `parent_path`, and `warehouse_id`.
-2. **Load references.** Read `references/creation-workflow.md` before authoring the JSON. If any selected object is a Metric View, read `references/metric-views.md`. Read `references/best-practices-checklist.md` while reviewing quality. Read `references/space-schema.md` when field shape or validation rules matter.
-3. **Validate datasets.** Use read-only DBSQL to confirm each data object exists. For tables/views, inspect comments, columns, data types, row/grain signals, candidate date columns, categorical values, measures, and likely joins. For Metric Views, inspect the YAML definition/metadata and validate representative queries with explicit dimensions and `MEASURE()` calls. Keep samples bounded and avoid dumping sensitive values.
-4. **Design the space.** Build a version 2 `serialized_space` object with focused `data_sources.tables` and/or `data_sources.metric_views`. For tables/views, add descriptive table/column metadata, useful synonyms, hidden noisy columns, entity matching/format assistance only where appropriate, explicit join specs, reusable SQL snippets, representative sample questions, and validated benchmarks when feasible. For Metric Views, prefer the semantic definitions already present in the Metric View and avoid duplicating metric formulas unless needed for cross-source examples.
-5. **Validate locally.** Save the decoded JSON under `genie_configs/` or another user-requested path, then run:
+1. **Gather requirements.** Capture the space purpose, audience, title or draft title, and 3-5 real business questions users want Genie to answer. Capture known business terms, KPI definitions, fiscal/calendar rules, default filters, row-level/security caveats, and sensitive columns.
+2. **Discover or confirm data.** If the user knows the catalog, schema, tables/views, or Metric Views, confirm those exact objects. Otherwise, search or browse Unity Catalog using terms from the requirements, synonyms, abbreviations, and likely fact/dimension naming patterns. Recommend a focused source set and explain how each source maps to the business questions.
+3. **Check feasibility.** Before deep profiling, compare the selected data objects to the business questions. Identify obvious gaps such as missing measures, time columns, dimensions, or join paths. Ask the user to proceed, add data, or adjust questions when the selected objects cannot support the goal.
+4. **Load references.** Read `references/creation-workflow.md` and `references/data-profiling-and-readiness.md` before authoring JSON. If any selected object is a Metric View, read `references/metric-views.md`. Read `references/best-practices-checklist.md` while reviewing quality. Read `references/space-schema.md` when field shape or validation rules matter.
+5. **Inspect and profile in phases.** Use read-only DBSQL to confirm each object exists, inspect metadata, then profile data quality, representative values, grain, freshness, joins, and usage/lineage signals. For Metric Views, inspect the definition/metadata and validate representative queries with explicit dimensions and `MEASURE()` calls. Keep samples bounded and avoid dumping sensitive values.
+6. **Assess readiness.** For each business question, state High/Medium/Low confidence based on semantic coverage, data quality/freshness, modelability/join evidence, and GenAI context readiness. Resolve low-confidence gaps before proceeding or mark the JSON as a draft with explicit limitations.
+7. **Design and review the space.** Build a version 2 `serialized_space` object with focused `data_sources.tables` and/or `data_sources.metric_views`. Prefer structured surfaces in this order: Metric View semantic metadata, table/column metadata, synonyms, format assistance/entity matching, join specs, SQL snippets, example SQLs, SQL functions, then concise global text instructions. Present the plan or draft config for review before live creation.
+8. **Validate locally.** Save the decoded JSON under `genie_configs/` or another user-requested path, then run:
 
    ```bash
    python3 external-agent/create-genie-space/scripts/validate_space_json.py <path-to-serialized-space.json>
    ```
 
    Fix all structural errors. Treat warnings from the best-practice checks as items to either address or explain.
-6. **Package for creation only when requested.** If the user wants an API payload, wrap the validated JSON as the `serialized_space` string in the create-space request body. If the user asks to create the live space, confirm the target workspace/profile and use the Databricks Genie create API only after validation passes.
+9. **Package for creation only when requested.** If the user wants an API payload, wrap the validated JSON as the `serialized_space` string in the create-space request body. If the user asks to create the live space, confirm the target workspace/profile and use the Databricks Genie create API only after validation passes.
 
 ## Output Requirements
 
 When finishing a creation task, provide:
 
 - The path to the validated decoded `serialized_space` JSON.
-- A concise summary of data objects included, Metric Views attached, columns hidden, joins added, snippets/examples/benchmarks created, and any assumptions.
+- A concise summary of requirements, data objects included, Metric Views attached, readiness confidence, columns hidden, joins added, snippets/examples/benchmarks created, and any assumptions.
 - The validation command result.
 - Any unresolved questions that affect correctness, such as ambiguous joins or business metric definitions.
 

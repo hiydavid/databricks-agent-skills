@@ -22,6 +22,24 @@ VALID_JOIN_RELATIONSHIPS = {
 V1_COLUMN_FIELDS = {"get_example_values", "build_value_dictionary"}
 V2_COLUMN_FIELDS = {"enable_format_assistance", "enable_entity_matching"}
 MAX_DATA_SOURCES = 30
+MAX_INSTRUCTION_OBJECTS = 100
+MAX_ENTITY_MATCHING_COLUMNS = 120
+MAX_TEXT_INSTRUCTION_CHARS = 2000
+SUMMARY_INSTRUCTION_HEADER = "Instructions you must follow when providing summaries"
+CANONICAL_GSL_HEADERS = [
+    "PURPOSE",
+    "DISAMBIGUATION",
+    "DATA QUALITY NOTES",
+    "CONSTRAINTS",
+    SUMMARY_INSTRUCTION_HEADER,
+]
+PARAM_RE = re.compile(r":([A-Za-z_][A-Za-z0-9_]*)\b")
+HEADER_RE = re.compile(r"(?m)^##\s+(.+?)\s*$")
+SQL_IN_PROSE_RE = re.compile(
+    r"\bselect\b.+\bfrom\b|\bwhere\s+[`A-Za-z_][\w.`]*\s*(=|<>|!=|>|<|>=|<=|in\b|like\b)"
+    r"|\bjoin\s+[`A-Za-z_][\w.`]*\s+\bon\b|\bgroup\s+by\b|\border\s+by\b|\bhaving\b",
+    re.I | re.S,
+)
 
 
 class ValidationError(Exception):
@@ -141,6 +159,74 @@ def check_string_array(warnings: list[str], path: str, value: Any) -> None:
         warnings.append(f"{path} should be an array of strings")
 
 
+def canonical_gsl_header(header: str) -> str | None:
+    normalized_header = re.sub(r"\s+", " ", header.strip()).lower()
+    for canonical in CANONICAL_GSL_HEADERS:
+        if normalized_header == canonical.lower():
+            return canonical
+    return None
+
+
+def has_default_value(param: dict[str, Any]) -> bool:
+    if "default_value" not in param:
+        return False
+    value = param.get("default_value")
+    if isinstance(value, dict):
+        values = value.get("values")
+        return isinstance(values, list) and any(str(item).strip() for item in values)
+    if isinstance(value, list):
+        return any(str(item).strip() for item in value)
+    return value is not None and str(value).strip() != ""
+
+
+def looks_placeholderish(value: Any) -> bool:
+    text = normalized(joined_text(value))
+    return bool(re.search(r"\b(example|placeholder|sample|test|todo|tbd|unknown|value)\b", text))
+
+
+def check_gsl_text_instruction(warnings: list[str], label: str, content: str) -> None:
+    if len(content) > MAX_TEXT_INSTRUCTION_CHARS:
+        warnings.append(
+            f"{label} is over {MAX_TEXT_INSTRUCTION_CHARS} characters; keep global instructions concise"
+        )
+    if len(content.split()) > 500:
+        warnings.append(f"{label} is long; keep global instructions concise")
+    if SQL_IN_PROSE_RE.search(content):
+        warnings.append(f"{label} appears to contain SQL; prefer snippets, joins, or examples")
+
+    matches = list(HEADER_RE.finditer(content))
+    if not matches:
+        warnings.append(f"{label} should use canonical GSL markdown sections")
+        return
+
+    seen_positions: list[int] = []
+    for match in matches:
+        raw_header = match.group(1).strip()
+        canonical = canonical_gsl_header(raw_header)
+        if canonical is None:
+            warnings.append(f"{label} has non-canonical GSL header {raw_header!r}")
+            continue
+        if canonical == SUMMARY_INSTRUCTION_HEADER and raw_header != SUMMARY_INSTRUCTION_HEADER:
+            warnings.append(
+                f"{label} should use exact summary heading '## {SUMMARY_INSTRUCTION_HEADER}'"
+            )
+        seen_positions.append(CANONICAL_GSL_HEADERS.index(canonical))
+
+    if seen_positions and seen_positions != sorted(seen_positions):
+        warnings.append(f"{label} GSL sections should appear in canonical order")
+
+    present = {canonical_gsl_header(match.group(1).strip()) for match in matches}
+    if "PURPOSE" not in present:
+        warnings.append(f"{label} should include a PURPOSE section for space scope and audience")
+
+
+def sql_contains_table_reference(sql_text: str, identifier: str, short_name: str) -> bool:
+    lowered = sql_text.lower()
+    identifier_l = identifier.lower()
+    short_l = short_name.lower()
+    return identifier_l in lowered or re.search(rf"\b{re.escape(short_l)}\b", lowered) is not None
+
+
 def config_sections(config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     return (
         as_dict(config.get("config")),
@@ -197,6 +283,7 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
     tables = as_list(data_sources.get("tables"))
     metric_views = as_list(data_sources.get("metric_views"))
     total_data_sources = len(tables) + len(metric_views)
+    entity_matching_columns = 0
     if not tables and not metric_views:
         errors.append("$.data_sources.tables or $.data_sources.metric_views must include at least one data source")
     if total_data_sources > MAX_DATA_SOURCES:
@@ -263,6 +350,8 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
                             errors.append(f"{column_label}.{field} is v1-only; use v2 fields for version 2 spaces")
                     if column_obj.get("enable_entity_matching") is True and column_obj.get("enable_format_assistance") is not True:
                         errors.append(f"{column_label}.enable_entity_matching requires enable_format_assistance")
+                    if column_obj.get("enable_entity_matching") is True:
+                        entity_matching_columns += 1
                 elif version == 1:
                     for field in V2_COLUMN_FIELDS:
                         if field in column_obj:
@@ -275,6 +364,12 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
                 if column_obj.get("exclude") is not True and column_name and not as_list(column_obj.get("synonyms")):
                     if not re.search(r"(^id$|_id$|uuid|timestamp|created_|updated_|deleted_|etl|ingest)", column_name, re.I):
                         warnings.append(f"{column_label}.synonyms is empty for a visible business column")
+
+    if entity_matching_columns > MAX_ENTITY_MATCHING_COLUMNS:
+        warnings.append(
+            f"entity matching is enabled for {entity_matching_columns} columns; "
+            f"keep it at or below {MAX_ENTITY_MATCHING_COLUMNS} focused categorical columns"
+        )
 
     sample_questions = as_list(config_section.get("sample_questions"))
     benchmark_questions = as_list(as_dict(config.get("benchmarks")).get("questions"))
@@ -317,6 +412,13 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
             if not joined_text(as_dict(snippet).get("sql")).strip():
                 errors.append(f"{label}.sql cannot be empty")
 
+    instruction_count = len(instruction_objects(instructions))
+    if instruction_count > MAX_INSTRUCTION_OBJECTS:
+        warnings.append(
+            f"instruction collections contain {instruction_count} objects; "
+            f"keep total instructions at or below {MAX_INSTRUCTION_OBJECTS}"
+        )
+
     all_ids = [obj["id"] for _, obj in iter_objects_with_id(config) if isinstance(obj.get("id"), str)]
     check_duplicates(errors, "all serialized_space objects", all_ids)
     check_duplicates(
@@ -330,10 +432,7 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
         errors.append("$.instructions.text_instructions allows at most one text instruction")
     for index, instruction in enumerate(text_instructions):
         content = joined_text(as_dict(instruction).get("content"))
-        if len(content.split()) > 500:
-            warnings.append(f"$.instructions.text_instructions[{index}] is long; keep global instructions concise")
-        if re.search(r"\bselect\b|\bjoin\b|\bwhere\b", content, re.I):
-            warnings.append(f"$.instructions.text_instructions[{index}] appears to contain SQL; prefer snippets or examples")
+        check_gsl_text_instruction(warnings, f"$.instructions.text_instructions[{index}]", content)
 
     if len(tables) > 1 and not join_specs:
         warnings.append("multiple tables/views are configured but $.instructions.join_specs is empty")
@@ -351,6 +450,42 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
             warnings.append(f"{label}.sql[0] should contain one equality condition; split compound joins")
         if not joined_text(join_obj.get("comment")).strip():
             warnings.append(f"{label}.comment should explain the business relationship")
+
+    for index, example in enumerate(example_sqls):
+        label = f"$.instructions.example_question_sqls[{index}]"
+        example_obj = as_dict(example)
+        sql_text = joined_text(example_obj.get("sql"))
+        usage_guidance = joined_text(example_obj.get("usage_guidance")).strip()
+        if not usage_guidance:
+            warnings.append(f"{label}.usage_guidance should explain when to apply the example")
+
+        placeholders = set(PARAM_RE.findall(sql_text))
+        params = as_list(example_obj.get("parameters"))
+        param_by_name = {
+            as_dict(param).get("name"): as_dict(param)
+            for param in params
+            if isinstance(as_dict(param).get("name"), str)
+        }
+        for name in sorted(placeholders):
+            if name not in param_by_name:
+                warnings.append(f"{label}.sql uses :{name} but parameters has no matching entry")
+        for param_index, param in enumerate(params):
+            param_label = f"{label}.parameters[{param_index}]"
+            param_obj = as_dict(param)
+            name = param_obj.get("name")
+            if not isinstance(name, str) or not name:
+                warnings.append(f"{param_label}.name is required")
+                continue
+            if name not in placeholders:
+                warnings.append(f"{param_label}.name {name!r} is not used by the SQL")
+            if not joined_text(param_obj.get("description")).strip():
+                warnings.append(f"{param_label}.description should describe the parameter and real values")
+            if not param_obj.get("type_hint"):
+                warnings.append(f"{param_label}.type_hint should be set")
+            if not has_default_value(param_obj):
+                warnings.append(f"{param_label}.default_value should contain a real profiled value")
+            elif looks_placeholderish(param_obj.get("default_value")):
+                warnings.append(f"{param_label}.default_value looks like a placeholder; use a real profiled value")
 
     if not sample_questions:
         warnings.append("$.config.sample_questions is empty; add representative UI starter questions")
@@ -373,6 +508,13 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
         answer = as_dict(answers[0])
         if answer.get("format") != "SQL":
             errors.append(f"{label}.answer[0].format must be SQL")
+        answer_sql = joined_text(answer.get("content"))
+        placeholders = sorted(set(PARAM_RE.findall(answer_sql)))
+        if placeholders:
+            warnings.append(
+                f"{label}.answer[0].content uses parameter placeholder(s) "
+                f":{', :'.join(placeholders)}; benchmark SQL should be concrete"
+            )
 
     benchmark_texts: list[tuple[str, str, str]] = []
     for index, question in enumerate(benchmark_questions):
@@ -387,9 +529,17 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
                 benchmark_texts.append((question_id, "answer", answer_text))
 
     example_text = normalized(joined_text(example_sqls))
+    sample_text = normalized(joined_text(sample_questions))
+    snippet_text = normalized(joined_text(snippets))
     for question_id, kind, benchmark_text in benchmark_texts:
-        if benchmark_text and benchmark_text in example_text:
+        if not benchmark_text:
+            continue
+        if benchmark_text in example_text:
             errors.append(f"$.instructions.example_question_sqls appears to copy benchmark {kind} from {question_id}")
+        if kind == "question" and benchmark_text in sample_text:
+            warnings.append(f"$.config.sample_questions appears to duplicate benchmark question from {question_id}")
+        if kind == "answer" and benchmark_text in snippet_text:
+            errors.append(f"$.instructions.sql_snippets appears to copy benchmark answer from {question_id}")
 
     metric_identifiers = [
         as_dict(metric_view).get("identifier")
@@ -402,7 +552,7 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
         for identifier, name in metric_names:
             identifier_l = identifier.lower()
             name_l = name.lower()
-            mentions_metric_view = identifier_l in lowered or re.search(rf"\b{re.escape(name_l)}\b", lowered)
+            mentions_metric_view = sql_contains_table_reference(sql_text, identifier, name)
             if not mentions_metric_view:
                 continue
             if re.search(r"\bselect\s+\*", lowered):

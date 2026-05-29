@@ -8,7 +8,7 @@ Minimum required inputs:
 
 - Catalog and schema containing the datasets.
 - Data object names and types: table/view identifiers for `data_sources.tables`, Metric View identifiers for `data_sources.metric_views`, or a mix of both. Use fully qualified `catalog.schema.object` identifiers when available.
-- Space purpose: the business questions the space should answer and the intended user group.
+- Space purpose, intended user group, and 3-5 real business questions the space should answer.
 
 Ask only when needed:
 
@@ -18,7 +18,29 @@ Ask only when needed:
 - For API payloads: `title`, `parent_path`, and `warehouse_id`.
 - For live creation: Databricks profile/workspace and explicit permission to create the space.
 
-## 2. Read-Only DBSQL Discovery
+## 2. Discovery And Feasibility
+
+Use the user's business questions to drive source selection.
+
+If the user does not know the source objects, search or browse Unity Catalog with:
+
+- Exact terms from the business questions.
+- Synonyms and abbreviations: customer/client/account, transaction/txn/trx, diagnosis/dx, procedure/px, etc.
+- Related entities that would answer the questions: facts, dimensions, date tables, customer/product/region/account tables.
+- Common naming patterns: `fact_`, `dim_`, `gold_`, `silver_`, `analytics`, `summary`, `metric`.
+
+Recommend a focused set, ideally 5 or fewer data objects initially. Explain which business questions each object supports and which objects you would skip because they are staging/raw/noisy or unrelated.
+
+Before deep profiling, do a feasibility check:
+
+- Each business question has plausible measures, dimensions, filters, and time fields.
+- Multi-table questions have plausible join paths.
+- Metric questions are either governed by Metric Views or have user-confirmed definitions.
+- Questions with missing sources or ambiguous definitions are called out before JSON authoring.
+
+If the selected data cannot support a question, ask the user to add data, revise the question, or proceed with an explicit Low-confidence limitation.
+
+## 3. Read-Only DBSQL Discovery And Profiling
 
 Use DBSQL MCP or native Databricks SQL. Keep queries targeted and bounded.
 
@@ -58,6 +80,16 @@ WHERE table_schema = '<schema>'
 ORDER BY table_name, constraint_name;
 ```
 
+Inspect row counts from information schema when available:
+
+```sql
+SELECT table_name, row_count
+FROM `<catalog>`.information_schema.tables
+WHERE table_schema = '<schema>'
+  AND table_name IN ('object_1', 'object_2')
+ORDER BY table_name;
+```
+
 For Metric Views, inspect the definition and agent metadata:
 
 ```sql
@@ -65,6 +97,8 @@ DESCRIBE TABLE EXTENDED <catalog.schema.metric_view_name> AS JSON;
 ```
 
 The returned definition can include dimensions, measures, filters, joins, and agent metadata. Use it to understand what the Metric View already defines before adding extra Genie instructions.
+
+Use `data-profiling-and-readiness.md` for the full profiling workflow. At minimum, profile row count, grain, key cardinality, date freshness, categorical values, null/empty/constant columns, casing issues, boolean-as-string values, noisy/sensitive fields, and join evidence.
 
 Use bounded profiling for candidate table/view columns:
 
@@ -77,6 +111,16 @@ SELECT
 FROM <catalog>.<schema>.<table>;
 ```
 
+Profile null, empty-string, and distinct-count signals in small batches:
+
+```sql
+SELECT
+  SUM(CASE WHEN <col_a> IS NULL THEN 1 ELSE 0 END) AS col_a_nulls,
+  COUNT(DISTINCT <col_a>) AS col_a_distinct,
+  SUM(CASE WHEN TRIM(CAST(<col_a> AS STRING)) = '' AND <col_a> IS NOT NULL THEN 1 ELSE 0 END) AS col_a_empty
+FROM <catalog>.<schema>.<table>;
+```
+
 For likely categorical filters in table/view data, sample distinct values with limits:
 
 ```sql
@@ -84,6 +128,59 @@ SELECT <category_col>, COUNT(*) AS row_count
 FROM <catalog>.<schema>.<table>
 GROUP BY <category_col>
 ORDER BY row_count DESC
+LIMIT 50;
+```
+
+For low-cardinality strings that users might filter by, check casing and boolean-as-string issues:
+
+```sql
+SELECT
+  LOWER(CAST(<string_col> AS STRING)) AS normalized_value,
+  COLLECT_SET(CAST(<string_col> AS STRING)) AS variants,
+  COUNT(*) AS row_count
+FROM <catalog>.<schema>.<table>
+WHERE <string_col> IS NOT NULL
+GROUP BY LOWER(CAST(<string_col> AS STRING))
+HAVING COUNT(DISTINCT CAST(<string_col> AS STRING)) > 1
+   OR LOWER(CAST(<string_col> AS STRING)) IN ('true', 'false', 'yes', 'no', 'y', 'n')
+ORDER BY row_count DESC
+LIMIT 50;
+```
+
+For likely joins, validate overlap and cardinality before adding join specs:
+
+```sql
+SELECT
+  COUNT(*) AS left_rows,
+  COUNT(DISTINCT l.<left_key>) AS left_key_count,
+  COUNT(DISTINCT r.<right_key>) AS matched_right_key_count
+FROM <catalog>.<schema>.<left_table> l
+LEFT JOIN <catalog>.<schema>.<right_table> r
+  ON l.<left_key> = r.<right_key>;
+```
+
+Use query history and lineage when accessible. Treat this as best-effort evidence; do not block creation if system tables are unavailable:
+
+```sql
+SELECT source_table_full_name, target_table_full_name, source_type, target_type
+FROM system.access.table_lineage
+WHERE (source_table_full_name IN ('<catalog.schema.table>')
+   OR target_table_full_name IN ('<catalog.schema.table>'))
+  AND event_time >= date_sub(current_date(), 30)
+LIMIT 50;
+```
+
+```sql
+SELECT
+  executed_by,
+  SUBSTRING(statement_text, 1, 500) AS query_preview,
+  total_duration_ms,
+  produced_rows
+FROM system.query.history
+WHERE start_time >= date_sub(current_date(), 7)
+  AND execution_status = 'FINISHED'
+  AND LOWER(statement_text) LIKE '%<catalog.schema.table>%'
+ORDER BY start_time DESC
 LIMIT 50;
 ```
 
@@ -108,7 +205,7 @@ LIMIT 20;
 
 Do not use `SELECT *` against Metric Views in examples or benchmarks because measures must be evaluated with `MEASURE()`.
 
-## 3. Interpret The Dataset
+## 4. Interpret The Dataset
 
 For each table or standard view, identify:
 
@@ -119,6 +216,7 @@ For each table or standard view, identify:
 - Filter columns users are likely to mention.
 - Internal or noisy fields to hide: ingestion metadata, raw blobs, technical hashes, duplicate IDs, audit columns, unused PII.
 - Join keys and relationship direction.
+- Query-history patterns that should influence joins, examples, sample questions, and benchmarks.
 
 For each Metric View, identify:
 
@@ -131,7 +229,16 @@ For each Metric View, identify:
 
 Ask the user to confirm any join or metric definition that is not supported by constraints, naming, or profiling evidence.
 
-## 4. Author The Version 2 JSON
+Assess readiness before authoring:
+
+- **Semantic coverage:** required measures, dimensions, filters, and time fields exist.
+- **Data quality and freshness:** important fields are populated, typed, current enough, and have usable value patterns.
+- **Modelability:** grain is clear and joins are supported by constraints, profiling, query history, or user confirmation.
+- **GenAI context readiness:** descriptions, synonyms, display names, and prompt matching choices map business language to data.
+
+Assign High/Medium/Low confidence to each business question. Do not present Low-confidence questions as supported without limitations.
+
+## 5. Author The Version 2 JSON
 
 Start from this shape:
 
@@ -163,6 +270,19 @@ Start from this shape:
 ```
 
 Generate every `id` as a unique 32-character lowercase hex string. Sort arrays as described in `space-schema.md`.
+
+### Surface Routing
+
+Prefer the most structured Genie surface that can represent the behavior:
+
+1. Metric View semantic metadata for governed measures, dimensions, filters, joins, display names, synonyms, and formatting.
+2. Table/Metric View descriptions and table column descriptions/synonyms for source and column selection.
+3. Format assistance and entity matching for eligible categorical values.
+4. Join specs for raw table/table or table/view relationships.
+5. SQL snippets for reusable filters, expressions, and measures not already governed by Metric Views.
+6. Example SQL for complex query shapes, parameterized examples, windowing, ranking, cohort analysis, Metric View `MEASURE()` patterns, and mixed-source CTE patterns.
+7. SQL functions for trusted registered logic that cannot be represented by snippets or examples.
+8. Text instructions only for concise global conventions, ambiguity handling, data-quality notes, constraints, and summary behavior.
 
 ### Data Sources
 
@@ -205,10 +325,23 @@ Recommended defaults:
 
 ### Text Instructions
 
-Use at most one text instruction. Keep it short and global. Good candidates:
+Use at most one text instruction. Keep it short, global, and under 2,000 characters when possible.
+
+Use canonical GSL sections in this order, omitting empty sections:
+
+- `## PURPOSE`
+- `## DISAMBIGUATION`
+- `## DATA QUALITY NOTES`
+- `## CONSTRAINTS`
+- `## Instructions you must follow when providing summaries`
+
+Good candidates:
 
 - Fiscal calendar or timezone conventions.
 - Default active/current-row rules that cannot be represented as snippets.
+- Ambiguous term handling that should trigger clarification.
+- Data quality notes that affect SQL generation, such as inconsistent casing or boolean-as-string fields.
+- Hard constraints such as PII columns or raw token fields never to project.
 - Response conventions that apply across all attached data objects.
 
 Do not put table-specific SQL, metric formulas, join logic, or long documentation in text instructions. Use metadata, snippets, join specs, example SQLs, or functions.
@@ -249,6 +382,13 @@ Use example SQLs only for representative patterns Genie may not infer from metad
 
 Keep examples concise. Include `usage_guidance` for complex examples. Do not copy benchmark questions or benchmark answer SQL verbatim.
 
+For parameterized example SQL:
+
+- The natural-language question should use a concrete real value, not a placeholder.
+- SQL may use `:param_name` placeholders.
+- Every parameter must have `name`, `description`, `type_hint`, and a real `default_value` from profiling.
+- Test parameterized SQL by substituting the default values before including it.
+
 ### Sample Questions
 
 Create 5-8 sample questions that demonstrate the space's strongest use cases. They should be user-facing prompts, not tests, and should cover distinct data objects/patterns.
@@ -257,9 +397,9 @@ Create 5-8 sample questions that demonstrate the space's strongest use cases. Th
 
 For an eval-ready space, target 30 diverse benchmark Q/A pairs. Include fewer only when the data scope cannot support more or the user asks for a lightweight starter config.
 
-Only include benchmark SQL that has been checked with read-only SQL execution or `EXPLAIN`. If validation is not possible, return benchmark candidates outside the JSON.
+Only include benchmark SQL that has been checked with read-only SQL execution or `EXPLAIN`. Benchmarks must use concrete real values, not parameters. Avoid benchmark SQL that returns zero rows unless the question is explicitly testing empty-result behavior. If validation is not possible, return benchmark candidates outside the JSON.
 
-## 5. Validate And Package
+## 6. Validate And Package
 
 Run:
 
@@ -268,6 +408,13 @@ python3 external-agent/create-genie-space/scripts/validate_space_json.py <path-t
 ```
 
 Fix errors before creating an API payload. Review warnings against `best-practices-checklist.md`.
+
+Also validate every SQL-bearing surface before including it where possible:
+
+- Example SQLs and benchmark SQLs should execute or pass `EXPLAIN`.
+- SQL snippets should be wrapped in simple `SELECT` queries and tested.
+- Join specs should be tested with `SELECT 1 ... JOIN ... LIMIT 1`.
+- Metric View examples and benchmarks must use `MEASURE()` and must not directly join Metric Views to other tables without a CTE.
 
 To build a create-space request body, wrap the decoded JSON as a string:
 

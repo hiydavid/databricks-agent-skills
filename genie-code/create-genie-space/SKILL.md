@@ -19,20 +19,23 @@ Create a focused Genie Space using Databricks-native context. Rely on Genie Code
 
 ## Workflow
 
-1. Clarify the minimum scope: target catalog/schema or provided `@` assets, selected tables/views/Metric Views, audience, Space purpose, intended benchmark execution target when benchmarks are requested, and whether the user wants a draft design or approved live change.
-2. Inspect the workspace context. Use Unity Catalog metadata, attached assets, and bounded SQL to identify source purpose, comments, columns, data types, grain, date fields, categorical values, measures, sensitive/noisy fields, and likely relationships.
-3. For Metric Views, inspect their available measures, dimensions, filters, joins, time dimensions, comments, display names, synonyms, and formatting before adding extra Genie context. Prefer governed Metric View semantics over duplicated SQL logic.
-4. Design the Genie Space surfaces:
+1. Gather requirements: target audience, Space purpose, draft title, 3-5 real business questions, known terminology, KPI definitions, fiscal/calendar conventions, default filters, security caveats, and intended benchmark execution target when benchmarks are requested.
+2. Discover or confirm data: use provided `@` assets or exact Unity Catalog identifiers when available; otherwise search/browse workspace data using terms from the requirements, synonyms, abbreviations, and likely fact/dimension naming patterns. Recommend a focused source set and explain how each data source maps to the business questions.
+3. Check feasibility before deep inspection. Compare selected tables/views/Metric Views to the business questions and flag missing measures, time columns, dimensions, or join paths. Proceed only when the user accepts the source set, adds data, or adjusts the questions.
+4. Inspect and profile in phases. Read Unity Catalog metadata first, then use bounded SQL and `references/data-profiling-and-readiness.md` to identify source purpose, row counts, grain, freshness, comments, columns, data types, null/empty/constant columns, categorical values, measures, sensitive/noisy fields, likely relationships, and usage/lineage signals where available.
+5. For Metric Views, inspect available measures, dimensions, filters, joins, time dimensions, comments, display names, synonyms, and formatting before adding extra Genie context. Prefer governed Metric View semantics over duplicated SQL logic.
+6. Assess readiness for each business question with High/Medium/Low confidence based on semantic coverage, data quality/freshness, modelability/join evidence, and GenAI context readiness. Mark unsupported questions and upstream semantic model gaps explicitly.
+7. Design the Genie Space surfaces:
    - data sources: keep the attached tables/views/Metric Views focused
    - descriptions and synonyms: clarify business meaning and selection boundaries
    - hidden fields: remove noisy technical columns from end-user context
    - prompt matching: enable only for eligible, useful categorical strings
    - joins: add standard raw-table relationships only when evidence or user confirmation supports them
    - snippets/examples: add reusable business logic and representative complex patterns only after metadata is insufficient
-   - text instructions: keep global and short
+   - text instructions: use only for global behavior that cannot be encoded in structured surfaces; include adapted justification when proposing or editing them
    - sample questions and benchmarks: cover realistic user workflows without teaching from benchmark answers. For benchmarks, choose SQL answers, evaluation notes, or both based on answer shape and intended execution mode.
-5. Review the draft against `references/space-design-guide.md` before proposing live changes.
-6. Present the proposed Space configuration in the Databricks-native editor or chat output for user review. Apply only after the user approves.
+8. Review the draft against `references/space-design-guide.md` before proposing live changes.
+9. Present the proposed Space configuration in the Databricks-native editor or chat output for user review. Apply only after the user approves.
 
 ## Output
 
@@ -40,6 +43,7 @@ Provide:
 
 - The Genie Space title or draft title.
 - The data sources included and why each belongs.
+- Per-question readiness confidence and data gaps.
 - Important metadata, prompt matching, join, snippet, example, sample question, and benchmark choices.
 - Benchmark execution target and field strategy when benchmarks are included.
 - Any assumptions or user confirmations needed before live creation or update.

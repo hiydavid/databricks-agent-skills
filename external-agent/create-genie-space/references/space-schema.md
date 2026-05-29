@@ -120,7 +120,11 @@ Guidance that shapes how Genie interprets questions and generates SQL.
     "text_instructions": [
       {
         "id": "d4e5f6a7b8c9d0e1f2a3b4c5d6a7b8c9",
-        "content": ["Revenue is calculated as quantity * unit_price.", "Always filter out cancelled orders unless explicitly requested."]
+        "content": [
+          "## PURPOSE\n- Answer order revenue questions for sales operations users.\n\n",
+          "## DISAMBIGUATION\n- When the user says Q1, interpret it as calendar Q1 unless they explicitly say fiscal Q1.\n\n",
+          "## Instructions you must follow when providing summaries\n- Always state the date range used in the answer.\n"
+        ]
       }
     ]
   }
@@ -132,6 +136,16 @@ Guidance that shapes how Genie interprets questions and generates SQL.
 | `text_instructions` | array | Free-text instructions applied globally |
 | `text_instructions[].id` | string | 32-char lowercase hex identifier |
 | `text_instructions[].content` | array of strings | The instruction text segments |
+
+Use at most one text instruction. Keep it concise and use canonical Markdown sections in this order, omitting empty sections:
+
+- `## PURPOSE`
+- `## DISAMBIGUATION`
+- `## DATA QUALITY NOTES`
+- `## CONSTRAINTS`
+- `## Instructions you must follow when providing summaries`
+
+Do not put SQL formulas, joins, filters, or table-specific examples in text instructions. Route those to SQL snippets, join specs, or example SQLs.
 
 ### Example Question SQLs
 
@@ -170,6 +184,8 @@ Guidance that shapes how Genie interprets questions and generates SQL.
 | `example_question_sqls[].parameters[].description` | array of strings | What the parameter represents |
 | `example_question_sqls[].parameters[].type_hint` | string | Data type hint (e.g., `"STRING"`, `"INT"`) |
 | `example_question_sqls[].parameters[].default_value` | object | Default value with `values` array |
+
+If example SQL uses `:param_name`, include matching parameter metadata with a real profiled default value. Benchmark SQL should be concrete and should not use parameters.
 
 ### Join Specs
 
@@ -344,13 +360,16 @@ Q&A pairs for validating Genie's SQL generation accuracy.
 | **Array length** | Maximum 10,000 items per array |
 | **ID uniqueness** | Question IDs must be unique across `sample_questions` and `benchmarks.questions` |
 | **Instruction ID uniqueness** | IDs must be unique across text instructions, example SQLs, SQL functions, join specs, and all SQL snippet types |
+| **Instruction count** | Keep total text instructions, example SQLs, SQL functions, join specs, and SQL snippet entries at or below 100 |
 | **Column uniqueness** | `(table_or_view_identifier, column_name)` must be unique for column configs |
-| **Text instruction count** | At most one text instruction is allowed per space |
+| **Text instruction count and shape** | At most one text instruction is allowed per space. Use canonical GSL headers and keep the block concise |
+| **Example SQL parameters** | Every `:param_name` placeholder should have matching `parameters[]` metadata with `name`, `description`, `type_hint`, and a real `default_value` |
 | **Join spec shape** | `join_specs[].sql` must have exactly two elements: one equality condition and one valid relationship annotation |
 | **Join relationship annotations** | Valid values are `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_MANY--`, `--rt=FROM_RELATIONSHIP_TYPE_ONE_TO_ONE--`, and `--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_MANY--` |
 | **Benchmark answer shape** | Each benchmark question should have exactly one answer and that answer should use `format: "SQL"` |
 | **SQL snippet content** | SQL snippet `sql` fields cannot be empty |
 | **Benchmark leakage** | Do not copy benchmark questions or benchmark answer SQL verbatim into sample questions, SQL snippets, or example SQL |
+| **Benchmark concreteness** | Benchmark SQL should use real literal values and should not contain `:param_name` placeholders |
 | **Metric View SQL** | Example SQLs and benchmark answers that query Metric Views should use explicit dimensions and `MEASURE(<measure_name>)`; do not use `SELECT *` against Metric Views |
 
 These checks determine whether a newly authored space JSON is safe to validate, package, and optionally hand off to `optimize-genie-space` for benchmark-driven tuning.
