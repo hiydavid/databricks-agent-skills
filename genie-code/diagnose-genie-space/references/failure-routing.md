@@ -10,6 +10,7 @@ Use this reference to classify Genie Space failures and choose the smallest usef
 - Join specs and comments for raw tables exposed together.
 - SQL snippets, example SQL, SQL functions, and text instructions.
 - Similar benchmark questions, SQL answers, evaluation notes, and execution mode, if present.
+- Benchmark inventory size, duplicate clusters, coverage categories, difficulty levels, and whether the set is too small, too narrow, too easy, or too large for practical iteration.
 - Agent-mode final reports, research steps, supporting query outputs, citations, tables, charts, and assessment notes when applicable.
 - Read-only checks for data types, categorical values, null rates, cardinality, join grain, and Metric View query behavior when needed.
 
@@ -70,6 +71,12 @@ Symptoms: invalid SQL answer, missing SQL for a deterministic Chat benchmark, un
 
 Fix: repair benchmark definitions outside Genie tuning. Use checked SQL for deterministic tabular questions, evaluation notes for Agent-style multi-step analysis, and both only when the same question has a single canonical result plus full-response quality criteria.
 
+### Benchmark Set Too Large Or Redundant
+
+Symptoms: too many questions for practical benchmark iteration, many near-duplicates that only swap dates or category literals, one source or metric overweighted, too many trivial lookup questions, or repeated variants that obscure root-cause patterns.
+
+Fix: recommend a dedicated benchmark pruning pass outside Genie tuning. Retain a representative set that preserves diversity, source and metric coverage, answer shapes, historically fragile behavior, and a meaningful mix of medium and hard questions, with only a small number of easy smoke tests. Record pruned question IDs and the coverage or difficulty rationale.
+
 ### Instruction Conflict Or Overload
 
 Symptoms: examples, snippets, benchmarks, or text instructions conflict; text instructions contain a long source-specific rulebook.
@@ -85,5 +92,5 @@ Treat these as blockers or warnings during diagnosis:
 - Important categorical filters without prompt matching.
 - Raw tables exposed together with missing joins.
 - Example SQL that copies benchmark questions.
-- Benchmark set too small, too narrow, missing checked SQL answers for deterministic Chat execution, or missing evaluation notes for Agent-style questions.
+- Benchmark set too small, too narrow, too easy, too redundant, too large for practical iteration, missing checked SQL answers for deterministic Chat execution, or missing evaluation notes for Agent-style questions.
 - Text instructions containing source-specific SQL logic.

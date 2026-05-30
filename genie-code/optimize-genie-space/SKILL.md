@@ -1,6 +1,6 @@
 ---
 name: optimize-genie-space
-description: "Optimize Databricks Genie Space quality in Databricks Genie Code Agent mode. Use inside Databricks for iterative Genie Space tuning with Chat-mode or Agent-mode benchmark review, one focused configuration pass at a time, read-only data inspection, native benchmark evaluation, baseline-to-candidate comparison, and regression analysis."
+description: "Optimize Databricks Genie Space quality in Databricks Genie Code Agent mode. Use inside Databricks for iterative Genie Space tuning with Chat-mode or Agent-mode benchmark review, benchmark repair or pruning, one focused configuration pass at a time, read-only data inspection, native benchmark evaluation, baseline-to-candidate comparison, and regression analysis."
 ---
 
 # Optimize Genie Space For Genie Code
@@ -11,13 +11,13 @@ Improve a Genie Space iteratively inside Databricks. Use Genie Code Agent mode t
 
 - Never mutate underlying tables, views, Metric Views, schemas, or source data.
 - Keep SQL inspection read-only and bounded.
-- Make one focused tuning pass at a time. Do not mix benchmark repair with Genie tuning in the same pass.
+- Make one focused tuning pass at a time. Do not mix benchmark repair or pruning with Genie tuning in the same pass.
 - Do not copy benchmark questions, answer SQL, or evaluation-note wording into sample questions, snippets, examples, or text instructions.
 - Benchmarks evaluate quality; they do not teach Genie by themselves.
 - Benchmark questions are shared definitions; Chat or Agent scoring is determined by benchmark execution mode.
 - Benchmark evaluation can be asynchronous. Do not compare a run until it has completed and produced per-question output.
 - Prefer structured Genie context over broad text instructions.
-- Get user approval before changing benchmark definitions. Benchmark repair changes only benchmark definitions, never source data or Genie tuning surfaces.
+- Get user approval before changing benchmark definitions. Benchmark repair or pruning changes only benchmark definitions, never source data or Genie tuning surfaces.
 - Before applying a Space/config edit, classify failed and needs-review benchmark questions using the repair decision stack in `references/optimization-guide.md`.
 - Every tuning pass must name the target failure cluster, selected repair lever, Space/config surface, expected fixes, related previous-good regression questions, and evaluation gate.
 - If durable multi-pass history is needed, use Unity Catalog optimization-history tables only after the user approves a catalog/schema location. Persistence is optional and must not modify source data.
@@ -32,8 +32,9 @@ Improve a Genie Space iteratively inside Databricks. Use Genie Code Agent mode t
    - for Agent execution, require clear questions and evaluation notes when the expected response needs grading guidance
    - exclude missing, invalid, duplicated, trivial, stale, ambiguous, or unscorable benchmark items
    - check coverage and challenge level across sources, metrics, filters, joins, time logic, ranking, answer shapes, and Agent response quality when applicable
-   - if fewer than 30 valid items remain for the target execution mode or the benchmark is dominated by trivial/easy questions, perform or recommend a dedicated benchmark repair pass before tuning
-4. For benchmark repair, get approval before changing benchmark definitions, repair only benchmark definitions, validate expected SQL with read-only SQL where practical, add or refine evaluation notes for Agent-style questions, run the relevant native benchmark evaluation, and use the completed output as the new baseline.
+   - if the benchmark is too large for practical iteration or dominated by near-duplicates, minor date/category variants, or low-challenge items, perform or recommend a dedicated pruning pass before tuning
+   - if fewer than 30 valid items remain for the target execution mode, the benchmark is dominated by trivial/easy questions, or pruning would leave coverage gaps, perform or recommend a dedicated benchmark repair pass before tuning
+4. For benchmark repair or pruning, get approval before changing benchmark definitions, change only benchmark definitions, validate expected SQL with read-only SQL where practical, add or refine evaluation notes for Agent-style questions, prune only when the retained set preserves diversity, coverage, and challenge level, run the relevant native benchmark evaluation, and use the completed output as the new baseline.
 5. Establish baseline behavior from the latest completed benchmark evaluation or run a native evaluation after user approval.
 6. If the optimization will span multiple passes or needs auditable history, confirm an approved Unity Catalog catalog/schema for optimization history and initialize or reuse the table set described in `references/optimization-guide.md`.
 7. Inspect the evidence available for the target execution mode:
@@ -75,6 +76,7 @@ Provide a concise optimization summary:
 ## Benchmark Review
 - Execution target:
 - Valid question count:
+- Pruning recommendation:
 - Benchmark field strategy:
 - Exclusions:
 - Coverage gaps:

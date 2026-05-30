@@ -27,15 +27,16 @@ Before tuning, review whether the benchmark is useful:
 - Mixed execution should use one shared benchmark set with per-question SQL answers, evaluation notes, or both, based on answer shape.
 - Coverage across source selection, Metric View measures, dimensions, filters, joins, date logic, ranking, aggregation grain, answer shapes, and Agent response quality when applicable.
 - A meaningful challenge mix. A benchmark dominated by easy questions is insufficient for tuning even when it has 30 valid benchmark items.
+- A manageable size for iterative native evaluation. An oversized benchmark with many redundant variants should be pruned before tuning when it slows iteration, obscures root causes, or overweights narrow behaviors.
 - No duplicates that only change a category or date.
 - No answer SQL that errors, uses stale fields, or encodes the wrong business definition.
 - No Agent evaluation note that is vague, contradictory, or asks the judge to reward unsupported claims.
 
-If benchmark quality is insufficient, do a dedicated benchmark repair pass first. Do not mix benchmark repair with Genie tuning.
+If benchmark quality is insufficient or the benchmark is oversized, do a dedicated benchmark repair or pruning pass first. Do not mix benchmark repair or pruning with Genie tuning.
 
 ## Benchmark Difficulty
 
-Use this light rubric when reviewing or repairing benchmark questions:
+Use this light rubric when reviewing, repairing, or pruning benchmark questions:
 
 - Easy: direct lookup, simple count, single-table filter, or no business logic.
 - Medium: reusable metric/filter, categorical mapping, date condition, grouping, basic aggregation, or Metric View measure selection.
@@ -47,6 +48,8 @@ Prefer a meaningful mix of medium and hard questions. Flag benchmarks as too eas
 
 Use benchmark repair when fewer than 30 valid benchmark items remain for the target execution mode, expected SQL is invalid or stale, evaluation notes are missing or unclear for Agent-style questions, questions are duplicate or trivial, the benchmark is too easy, or coverage is too narrow for benchmark-driven tuning.
 
+Use benchmark pruning when the benchmark started with too many questions for practical iteration or contains many redundant variants. Pruning is benchmark repair: get approval first, change only benchmark definitions, and do not tune Genie configuration in the same pass.
+
 A valid benchmark item has a current, non-trivial question plus enough ground truth for the intended execution mode:
 
 - `single_sql_answer`: add a checked SQL answer for deterministic tabular questions.
@@ -56,9 +59,9 @@ A valid benchmark item has a current, non-trivial question plus enough ground tr
 
 Checked SQL should match the current schema and business definition, run successfully or have read-only validation evidence, and avoid obsolete tables, columns, filters, or Metric View assumptions. Evaluation notes should state the expected content, evidence, caveats, and response-quality criteria without prescribing a hidden one-off answer.
 
-Before changing benchmark definitions, get user approval and keep the pass limited to benchmark definitions. Do not mix benchmark repair with Genie tuning.
+Before changing benchmark definitions, get user approval and keep the pass limited to benchmark definitions. Do not mix benchmark repair or pruning with Genie tuning.
 
-For each added or replaced benchmark item, record:
+For each added, replaced, retained, or pruned benchmark item, record:
 
 - question text;
 - benchmark field strategy: SQL, evaluation note, both, or excluded;
@@ -67,9 +70,43 @@ For each added or replaced benchmark item, record:
 - difficulty level;
 - coverage category, such as source routing, Metric View measure, filter, join, time logic, ranking, aggregation grain, answer shape, multi-query investigation, evidence quality, or response synthesis;
 - referenced tables, Metric Views, and columns;
-- whether it adds coverage or replaces an invalid, stale, duplicate, or trivial question.
+- whether it adds coverage, replaces an invalid, stale, duplicate, or trivial question, or is retained as a representative item;
+- pruning rationale when removed or excluded.
 
-Repair enough benchmark items to reach at least 30 valid items for the target execution mode. After benchmark repair, run the relevant native benchmark evaluation, wait for completed per-question output, and use that result as the new baseline before starting Genie tuning.
+Repair enough benchmark items to reach at least 30 valid items for the target execution mode. When pruning, retain a compact representative set with at least 30 valid items unless the user explicitly accepts a smaller diagnostic-only set. After benchmark repair or pruning, run the relevant native benchmark evaluation, wait for completed per-question output, and use that result as the new baseline before starting Genie tuning.
+
+## Benchmark Pruning
+
+Prune by evidence, not by arbitrary count. Build a question inventory with fields for execution mode, field strategy, validity, difficulty, coverage category, source/table or Metric View, referenced columns, answer shape, business priority, and recent assessment.
+
+Prefer retaining questions that:
+
+- cover distinct sources, Metric Views, metrics, dimensions, filters, joins, date roles, grain patterns, rankings, answer shapes, and Agent response-quality expectations;
+- exercise medium or hard reasoning, reusable business logic, high-value workflows, and historically fragile behavior;
+- have current checked SQL, clear Agent evaluation notes, or both as required by the execution target;
+- include a small number of easy smoke tests for critical sources or metrics.
+
+Prefer pruning questions that:
+
+- are invalid, stale, ambiguous, unscorable, or missing required ground truth;
+- duplicate another item except for a date, category, region, or customer literal;
+- test a narrow one-off detail with low business value and no unique failure mode;
+- are trivial easy lookups when the same source or metric is already covered by stronger questions;
+- overweight one source, metric, dimension, or answer shape compared with the Space's intended usage.
+
+Use a coverage matrix before finalizing the pruned set:
+
+```markdown
+## Benchmark Pruning Matrix
+
+| Coverage area | Retained question IDs | Difficulty mix | Pruned near-duplicates | Gap after pruning? |
+|---|---|---|---|---|
+| Metric View measures | q_001, q_014, q_027 | easy/medium/hard | q_002, q_003 | no |
+| Time logic | q_006, q_021 | medium/hard | q_007 | fiscal quarter boundary not covered |
+| Agent synthesis | q_030, q_031 | hard | q_032, q_033 | no |
+```
+
+Before applying pruning, state the retained denominator, removed or excluded question IDs, coverage preserved, coverage lost, difficulty distribution, and whether follow-up benchmark repair is needed to fill gaps. After pruning, run the relevant native benchmark evaluation and use the completed output as the new baseline.
 
 ## Repair Decision Stack
 

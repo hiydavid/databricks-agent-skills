@@ -1,6 +1,6 @@
 ---
 name: diagnose-genie-space
-description: "Diagnose Databricks Genie Space quality issues in Databricks Genie Code Agent mode. Use inside Databricks when users ask why a Genie Space gives wrong SQL, wrong answers, inconsistent answers, weak Agent-mode reports, source-selection errors, metric, dimension, filter, join, time logic, benchmark, or instruction problems, or when they need a plan-only health check before tuning."
+description: "Diagnose Databricks Genie Space quality issues in Databricks Genie Code Agent mode. Use inside Databricks when users ask why a Genie Space gives wrong SQL, wrong answers, inconsistent answers, weak Agent-mode reports, source-selection errors, metric, dimension, filter, join, time logic, benchmark size, benchmark coverage, benchmark pruning, or instruction problems, or when they need a plan-only health check before tuning."
 ---
 
 # Diagnose Genie Space For Genie Code
@@ -28,6 +28,7 @@ Diagnose Genie Space quality without making changes. Use Genie Code Agent mode t
    - attached tables, views, Metric Views, measures, dimensions, filters, and descriptions
    - relevant column comments, synonyms, prompt matching settings, and hidden fields
    - join specs, SQL snippets, example SQL, text instructions, sample questions, and benchmarks
+   - benchmark inventory size, validity, duplicate clusters, coverage categories, and difficulty mix when benchmarks are part of the case
 3. Use bounded read-only SQL only when the Space context does not explain the issue. For Metric View failures, inspect the Metric View definition before dropping down to raw sources.
 4. Classify the primary failure and secondary contributors using `references/failure-routing.md`.
 5. Recommend the smallest structured tuning change. Prefer metadata, Metric View semantics, prompt matching, joins, snippets, and representative examples before text instructions.
@@ -62,6 +63,7 @@ Use this shape:
 ## Health Check
 - Ready for tuning:
 - Benchmark concerns:
+- Pruning opportunity:
 - Benchmark execution target:
 - Highest-risk static issues:
 ```
