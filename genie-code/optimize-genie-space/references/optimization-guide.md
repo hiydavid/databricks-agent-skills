@@ -2,6 +2,15 @@
 
 Use this reference when tuning a Genie Space in Databricks-native workflows.
 
+## Navigation
+
+- `Core Principle`: repair failed benchmark evidence with the smallest structured Genie context change.
+- `Benchmark Integrity`, `Benchmark Difficulty`, `Benchmark Repair`, and `Benchmark Pruning`: review, repair, or prune benchmarks before tuning.
+- `Repair Decision Stack`, `Judge-Style Failure Triage`, `Failure Clustering`, and `Failure-to-Lever Routing`: classify valid failures and choose the repair lever.
+- `Proactive Enrichment Before Repair` and `Text Instruction Last-Resort Rule`: prevent broad or leaky edits.
+- `Evaluation Gates`, `Acceptance Decision`, `Iteration Reflection`, and `Genie Repair Plan`: run and document candidate passes.
+- `Optional Unity Catalog Table Persistence`: record auditable multi-pass history only after user approval.
+
 ## Core Principle
 
 Translate failed benchmark evidence into structured Genie context. Prefer this order:

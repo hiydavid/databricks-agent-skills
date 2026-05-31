@@ -15,64 +15,7 @@ Before deeper profiling, check feasibility. Flag missing measures, dimensions, t
 
 ## Read-Only Discovery And Profiling
 
-Use focused SQL only when workspace metadata is not enough:
-
-```sql
-SELECT table_catalog, table_schema, table_name, table_type, comment
-FROM <catalog>.information_schema.tables
-WHERE table_schema = '<schema>'
-ORDER BY table_name;
-```
-
-```sql
-SELECT table_name, ordinal_position, column_name, data_type, comment
-FROM <catalog>.information_schema.columns
-WHERE table_schema = '<schema>'
-ORDER BY table_name, ordinal_position;
-```
-
-```sql
-DESCRIBE TABLE EXTENDED <catalog.schema.metric_view> AS JSON;
-```
-
-```sql
-SELECT <category_col>, COUNT(*) AS row_count
-FROM <catalog>.<schema>.<table>
-GROUP BY <category_col>
-ORDER BY row_count DESC
-LIMIT 50;
-```
-
-```sql
-SELECT
-  SUM(CASE WHEN <col_a> IS NULL THEN 1 ELSE 0 END) AS col_a_nulls,
-  COUNT(DISTINCT <col_a>) AS col_a_distinct,
-  SUM(CASE WHEN TRIM(CAST(<col_a> AS STRING)) = '' AND <col_a> IS NOT NULL THEN 1 ELSE 0 END) AS col_a_empty
-FROM <catalog>.<schema>.<table>;
-```
-
-```sql
-SELECT
-  COUNT(*) AS left_rows,
-  COUNT(DISTINCT l.<left_key>) AS left_key_count,
-  COUNT(DISTINCT r.<right_key>) AS matched_right_key_count
-FROM <catalog>.<schema>.<left_table> l
-LEFT JOIN <catalog>.<schema>.<right_table> r
-  ON l.<left_key> = r.<right_key>;
-```
-
-Use `references/data-profiling-and-readiness.md` for row counts, grain, freshness/date ranges, null/empty/constant columns, cardinality, casing, boolean-as-string, PII/ETL/noisy fields, usage/lineage, and per-question readiness.
-
-For Metric Views, validate query examples with explicit dimensions and `MEASURE()`:
-
-```sql
-SELECT
-  <dimension_name>,
-  MEASURE(<measure_name>) AS <measure_alias>
-FROM <catalog>.<schema>.<metric_view>
-GROUP BY ALL
-LIMIT 20;
-```
+Use workspace metadata first, then run focused read-only SQL only when metadata is not enough. Use `references/data-profiling-and-readiness.md` for SQL templates covering structure, row counts, grain, freshness/date ranges, null/empty/constant columns, cardinality, casing, boolean-as-string values, join overlap, Metric View `MEASURE()` behavior, PII/ETL/noisy fields, usage/lineage, and per-question readiness.
 
 ## Design Priorities
 

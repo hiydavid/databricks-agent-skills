@@ -17,6 +17,28 @@ For each Metric View, identify governed measures, dimensions, filters, joins, ti
 
 ## Read-Only SQL Templates
 
+Workspace metadata and columns:
+
+```sql
+SELECT table_catalog, table_schema, table_name, table_type, comment
+FROM <catalog>.information_schema.tables
+WHERE table_schema = '<schema>'
+ORDER BY table_name;
+```
+
+```sql
+SELECT table_name, ordinal_position, column_name, data_type, comment
+FROM <catalog>.information_schema.columns
+WHERE table_schema = '<schema>'
+ORDER BY table_name, ordinal_position;
+```
+
+Metric View metadata:
+
+```sql
+DESCRIBE TABLE EXTENDED <catalog.schema.metric_view> AS JSON;
+```
+
 Row count, key cardinality, and date range:
 
 ```sql
@@ -75,6 +97,17 @@ SELECT
 FROM <catalog>.<schema>.<left_table> l
 LEFT JOIN <catalog>.<schema>.<right_table> r
   ON l.<left_key> = r.<right_key>;
+```
+
+Metric View measure and dimension behavior:
+
+```sql
+SELECT
+  <dimension_name>,
+  MEASURE(<measure_name>) AS <measure_alias>
+FROM <catalog>.<schema>.<metric_view>
+GROUP BY ALL
+LIMIT 20;
 ```
 
 Recent usage and lineage when available:

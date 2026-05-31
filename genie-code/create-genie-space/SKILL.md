@@ -1,6 +1,6 @@
 ---
 name: create-genie-space
-description: "Create or refine a Databricks Genie Space from Unity Catalog tables, views, and Metric Views in Databricks Genie Code Agent mode. Use inside Databricks when users ask Genie Code to build, bootstrap, configure, or review a Genie Space, inspect workspace data context, choose focused data sources, design instructions, examples, sample questions, Chat or Agent benchmarks, or prepare safe Space changes without source data mutation."
+description: "Create or refine an initial Databricks Genie Space design from Unity Catalog tables, views, and Metric Views in Databricks Genie Code Agent mode. Use inside Databricks when users ask Genie Code to build, bootstrap, or draft a focused Space, inspect workspace data context, choose data sources, design structured context, examples, sample questions, Chat or Agent benchmarks, or prepare safe proposed Space changes without source data mutation."
 ---
 
 # Create Genie Space For Genie Code

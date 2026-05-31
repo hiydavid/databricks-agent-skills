@@ -1,6 +1,6 @@
 ---
 name: diagnose-genie-space
-description: "Diagnose Databricks Genie Space quality issues in Databricks Genie Code Agent mode. Use inside Databricks when users ask why a Genie Space gives wrong SQL, wrong answers, inconsistent answers, weak Agent-mode reports, source-selection errors, metric, dimension, filter, join, time logic, benchmark size, benchmark coverage, benchmark pruning, or instruction problems, or when they need a plan-only health check before tuning."
+description: "Diagnose Databricks Genie Space quality issues without making changes in Databricks Genie Code Agent mode. Use inside Databricks when users ask for plan-only root-cause analysis, health checks, or explanations for wrong SQL, wrong answers, inconsistent answers, weak Agent-mode reports, source-selection errors, metric, dimension, filter, join, time logic, benchmark size, benchmark coverage, benchmark pruning, or instruction problems before tuning."
 ---
 
 # Diagnose Genie Space For Genie Code
@@ -68,4 +68,4 @@ Use this shape:
 - Highest-risk static issues:
 ```
 
-End with the next action: either user confirmation needed, a safe manual Space edit, or a handoff to `optimize-genie-space`.
+End with the next action: either user confirmation needed, a handoff to `optimize-genie-space`, or a user-approved manual edit outside this diagnostic pass.

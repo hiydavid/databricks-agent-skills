@@ -1,6 +1,6 @@
 ---
 name: optimize-genie-space
-description: "Optimize Databricks Genie Space quality in Databricks Genie Code Agent mode. Use inside Databricks for iterative Genie Space tuning with Chat-mode or Agent-mode benchmark review, benchmark repair or pruning, one focused configuration pass at a time, read-only data inspection, native benchmark evaluation, baseline-to-candidate comparison, and regression analysis."
+description: "Optimize Databricks Genie Space quality through approved iterative tuning in Databricks Genie Code Agent mode. Use inside Databricks when users ask to make reviewed Space edits, repair or prune benchmarks, launch native Chat-mode or Agent-mode benchmark evaluations, compare baseline-to-candidate results, analyze regressions, and run one focused configuration pass at a time with bounded read-only data inspection."
 ---
 
 # Optimize Genie Space For Genie Code
@@ -17,10 +17,11 @@ Improve a Genie Space iteratively inside Databricks. Use Genie Code Agent mode t
 - Benchmark questions are shared definitions; Chat or Agent scoring is determined by benchmark execution mode.
 - Benchmark evaluation can be asynchronous. Do not compare a run until it has completed and produced per-question output.
 - Prefer structured Genie context over broad text instructions.
-- Get user approval before changing benchmark definitions. Benchmark repair or pruning changes only benchmark definitions, never source data or Genie tuning surfaces.
+- Get explicit user approval before applying Space edits, changing benchmark definitions, launching native benchmark evaluations, or writing Unity Catalog optimization history.
+- Benchmark repair or pruning changes only benchmark definitions, never source data or Genie tuning surfaces.
 - Before applying a Space/config edit, classify failed and needs-review benchmark questions using the repair decision stack in `references/optimization-guide.md`.
 - Every tuning pass must name the target failure cluster, selected repair lever, Space/config surface, expected fixes, related previous-good regression questions, and evaluation gate.
-- If durable multi-pass history is needed, use Unity Catalog optimization-history tables only after the user approves a catalog/schema location. Persistence is optional and must not modify source data.
+- If durable multi-pass history is needed, write only to user-approved Unity Catalog optimization-history tables. Persistence is optional and must never modify source data or source schemas.
 
 ## Workflow
 
@@ -34,7 +35,7 @@ Improve a Genie Space iteratively inside Databricks. Use Genie Code Agent mode t
    - check coverage and challenge level across sources, metrics, filters, joins, time logic, ranking, answer shapes, and Agent response quality when applicable
    - if the benchmark is too large for practical iteration or dominated by near-duplicates, minor date/category variants, or low-challenge items, perform or recommend a dedicated pruning pass before tuning
    - if fewer than 30 valid items remain for the target execution mode, the benchmark is dominated by trivial/easy questions, or pruning would leave coverage gaps, perform or recommend a dedicated benchmark repair pass before tuning
-4. For benchmark repair or pruning, get approval before changing benchmark definitions, change only benchmark definitions, validate expected SQL with read-only SQL where practical, add or refine evaluation notes for Agent-style questions, prune only when the retained set preserves diversity, coverage, and challenge level, run the relevant native benchmark evaluation, and use the completed output as the new baseline.
+4. For benchmark repair or pruning, get approval before changing benchmark definitions, change only benchmark definitions, validate expected SQL with read-only SQL where practical, add or refine evaluation notes for Agent-style questions, prune only when the retained set preserves diversity, coverage, and challenge level, run the relevant native benchmark evaluation after approval, and use the completed output as the new baseline.
 5. Establish baseline behavior from the latest completed benchmark evaluation or run a native evaluation after user approval.
 6. If the optimization will span multiple passes or needs auditable history, confirm an approved Unity Catalog catalog/schema for optimization history and initialize or reuse the table set described in `references/optimization-guide.md`.
 7. Inspect the evidence available for the target execution mode:
@@ -43,7 +44,7 @@ Improve a Genie Space iteratively inside Databricks. Use Genie Code Agent mode t
 8. Exclude invalid benchmark, stale ground-truth, unclear evaluation notes, permission, incomplete-eval, warehouse, or platform failures from tuning decisions.
 9. Cluster valid tuning failures by shared root cause using `references/optimization-guide.md`.
 10. Choose one failure cluster or small related cluster set and select the smallest structured repair lever.
-11. Write the before config snapshot and repair analysis when approved Unity Catalog optimization-history tables are available.
+11. Write the before config snapshot and repair analysis only when approved Unity Catalog optimization-history tables are available.
 12. Apply approved Space edits using the selected structured surface:
    - data source or column descriptions
    - Metric View metadata exposed in the Space or an upstream semantic model recommendation
@@ -52,8 +53,8 @@ Improve a Genie Space iteratively inside Databricks. Use Genie Code Agent mode t
    - SQL snippets
    - representative example SQL
    - short global text instruction
-13. Run the narrowest useful native benchmark evaluation available for affected questions and related previous-good regression questions.
-14. Run the full relevant benchmark when targeted checks pass or when targeted evaluation is unavailable or not representative, then wait for completed per-question output.
+13. After user approval, run the narrowest useful native benchmark evaluation available for affected questions and related previous-good regression questions.
+14. After user approval, run the full relevant benchmark when targeted checks pass or when targeted evaluation is unavailable or not representative, then wait for completed per-question output.
 15. Compare baseline and candidate behavior:
    - execution target and scoring mode
    - Chat accuracy change from SQL/result-set comparison, when run
