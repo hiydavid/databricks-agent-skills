@@ -1,15 +1,16 @@
 ---
 name: diagnose-genie-space
-description: "Diagnose Databricks Genie Space quality issues without making changes in Databricks Genie Code Agent mode. Use inside Databricks when users ask for plan-only root-cause analysis, health checks, or explanations for wrong SQL, wrong answers, inconsistent answers, weak Agent-mode reports, source-selection errors, metric, dimension, filter, join, time logic, benchmark size, benchmark coverage, benchmark pruning, or instruction problems before tuning."
+description: "Diagnose Databricks Genie Space quality issues without making changes in Databricks Genie Code Agent mode. Use inside Databricks when users ask for plan-only root-cause analysis, health checks, or explanations for wrong SQL, wrong answers, inconsistent answers, weak Agent-mode reports, source-selection errors, metric, dimension, filter, join, time logic, benchmark size, benchmark coverage, benchmark pruning, monitoring feedback, thumbs up/down trends, review requests, user comments, usage trends, conversation-quality signals, or instruction problems before tuning."
 ---
 
 # Diagnose Genie Space For Genie Code
 
-Diagnose Genie Space quality without making changes. Use Genie Code Agent mode to inspect the Space, workspace assets, Unity Catalog metadata, and bounded read-only SQL output when needed.
+Diagnose Genie Space quality without making changes. Use Genie Code Agent mode to inspect the Space, Monitor-tab feedback, workspace assets, Unity Catalog metadata, and bounded read-only SQL output when needed.
 
 ## Boundaries
 
 - This skill is plan-only. Do not edit the Genie Space, change benchmarks, run benchmark evaluation, or mutate source data.
+- Do not send feedback, create comments, delete conversations, edit generated SQL, save instructions, add benchmarks, or change conversation review status during diagnosis.
 - Use only bounded read-only SQL: `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, and `information_schema`.
 - Ask for missing business intent or expected behavior when workspace evidence is insufficient.
 - Prefer concrete evidence over generic best-practice advice.
@@ -29,10 +30,16 @@ Diagnose Genie Space quality without making changes. Use Genie Code Agent mode t
    - relevant column comments, synonyms, prompt matching settings, and hidden fields
    - join specs, SQL snippets, example SQL, text instructions, sample questions, and benchmarks
    - benchmark inventory size, validity, duplicate clusters, coverage categories, and difficulty mix when benchmarks are part of the case
-3. Use bounded read-only SQL only when the Space context does not explain the issue. For Metric View failures, inspect the Metric View definition before dropping down to raw sources.
-4. Classify the primary failure and secondary contributors using `references/failure-routing.md`.
-5. Recommend the smallest structured tuning change. Prefer metadata, Metric View semantics, prompt matching, joins, snippets, and representative examples before text instructions.
-6. Produce a concise diagnostic write-up in chat or notebook output.
+3. Inspect existing Monitor-tab feedback as first-class evidence:
+   - weekly digest message volume, active users, thumbs up/down counts or trends, and usage patterns
+   - filtered conversations with negative ratings, `Fix it`, `Request review`, needs-review status, repeated questions, or common user phrasing
+   - reviewable conversation details: user prompt, Genie response, generated SQL or error, feedback comment, reviewer comments, citations, and whether the issue repeats across conversations
+   - privacy limitations: when conversations are private, use only visible prompt, status, rating, timestamp, and trend metadata; state what could not be inspected
+   - fallback evidence, when UI access supports it: Genie `Analyze space usage`, Genie conversation APIs, or read-only `system.access.audit` queries for `updateConversationMessageFeedback` and `createConversationMessageComment`
+4. Use bounded read-only SQL only when the Space context or feedback evidence does not explain the issue. For Metric View failures, inspect the Metric View definition before dropping down to raw sources.
+5. Classify the primary failure and secondary contributors using `references/failure-routing.md`. Treat feedback as evidence that helps cluster failures, not as a separate tuning surface.
+6. Recommend the smallest structured tuning change. Prefer metadata, Metric View semantics, prompt matching, joins, snippets, and representative examples before text instructions.
+7. Produce a concise diagnostic write-up in chat or notebook output.
 
 ## Diagnostic Write-Up
 
@@ -53,6 +60,7 @@ Use this shape:
 
 ## Evidence
 - Space context:
+- Feedback signals:
 - Read-only inspection:
 - Limitations:
 
@@ -62,6 +70,8 @@ Use this shape:
 
 ## Health Check
 - Ready for tuning:
+- Feedback coverage:
+- Feedback concerns:
 - Benchmark concerns:
 - Pruning opportunity:
 - Benchmark execution target:
