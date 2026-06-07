@@ -26,6 +26,7 @@ This repository has two skill distributions:
 | **[genie-code/create-genie-space](./genie-code/create-genie-space/)** | Create or refine Genie Spaces using Genie Code's native Unity Catalog and workspace context |
 | **[genie-code/diagnose-genie-space](./genie-code/diagnose-genie-space/)** | Diagnose Genie Space quality and benchmark health issues inside Databricks without external setup |
 | **[genie-code/optimize-genie-space](./genie-code/optimize-genie-space/)** | Tune Genie Space quality with Databricks-native benchmark review, repair, pruning, and iteration |
+| **[genie-code/optimize-genie-query](./genie-code/optimize-genie-query/)** | Analyze Genie Space generated SQL, Query Profile, table layout, and SQL warehouse performance without making changes |
 
 ## Setup
 
@@ -89,7 +90,7 @@ Workspace/.assistant/skills/
     └── references/
 ```
 
-For example, copy `genie-code/create-genie-space`, `genie-code/diagnose-genie-space`, or `genie-code/optimize-genie-space` into one of those `.assistant/skills/` locations. Genie Code automatically discovers skills in Agent mode. See the [Databricks Genie Code skills docs](https://docs.databricks.com/aws/en/genie-code/skills) for details.
+For example, copy `genie-code/create-genie-space`, `genie-code/diagnose-genie-space`, `genie-code/optimize-genie-space`, or `genie-code/optimize-genie-query` into one of those `.assistant/skills/` locations. Genie Code automatically discovers skills in Agent mode. See the [Databricks Genie Code skills docs](https://docs.databricks.com/aws/en/genie-code/skills) for details.
 
 Example prompt for iterative Genie Space optimization:
 
@@ -112,7 +113,8 @@ databricks-agent-skills/
 ├── genie-code/                  # Databricks Genie Code-only skill pack
 │   ├── create-genie-space/
 │   ├── diagnose-genie-space/
-│   └── optimize-genie-space/
+│   ├── optimize-genie-space/
+│   └── optimize-genie-query/
 ├── package.json
 └── README.md
 ```
