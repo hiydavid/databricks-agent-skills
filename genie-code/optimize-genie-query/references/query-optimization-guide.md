@@ -1,26 +1,32 @@
 # Genie Query Optimization Guide
 
-Use this reference when analyzing Genie Space generated SQL, SQL warehouse behavior, and table layout from a performance and cost perspective in Databricks-native workflows.
+Use this reference when analyzing benchmark-generated Genie Space SQL, Query History Insights, SQL warehouse behavior, and table layout from a performance and cost perspective in Databricks-native workflows.
 
 ## Navigation
 
-- `Evidence Order`: gather query, profile, table, and warehouse facts before recommending changes.
+- `Evidence Order`: use benchmark-generated Query History Insights first when available, then validate with profile, table, and warehouse facts.
+- `Benchmark And Insights Workflow`: launch approved benchmark runs and triage Query History insight candidates.
 - `Read-Only SQL Templates`: bounded inspection templates for Genie Query History, warehouse activity, table metadata, layout, and optimization history.
 - `Issue Taxonomy`: classify performance symptoms with stable labels.
+- `Query Performance Insight Routing`: map Databricks insight labels to owners, validation, and anti-patterns.
 - `Evidence-To-Lever Routing`: map observed symptoms to the smallest useful recommendation.
 - `Validation`: prove that recommendations improve performance without changing the answer.
 - `Report Template`: produce a concise, evidence-backed handoff.
 
 ## Evidence Order
 
-Use this order unless the user provides a specific statement ID or profile first:
+Use this order unless the user provides a specific statement ID, profile, or existing insight-backed Query History row first:
 
-1. Confirm the generated SQL is semantically correct enough to optimize. If the query is answering the wrong business question, route to `semantic_wrong_sql`.
-2. Inspect `system.query.history` for Genie-originated statements, durations, scan metrics, cache status, spill, queue time, and warehouse ID.
-3. Inspect the Query Profile for the slowest operators, scans, joins, shuffles, sorts, aggregates, memory, rows, and Photon fallback.
-4. Inspect the Space sources and instructions that influence query shape, including broad source scope, hidden/exposed columns, joins, SQL snippets, examples, and Metric Views.
-5. Inspect source objects for layout, statistics, clustering, partitioning, predictive optimization, and whether views or materialized views would reduce repeated work.
-6. Inspect warehouse settings and events only after separating query-shape and table-layout causes from queue, startup, memory, and concurrency causes.
+1. Confirm the benchmark target, target questions, benchmark run window, warehouse, and user approval before launching any native benchmark run.
+2. Run the approved native benchmark, or use a completed benchmark run/query history window when benchmark launch is not approved.
+3. Open Query History, filter to benchmark-generated Genie queries, and prioritize rows with Query performance insights.
+4. Use Query History's Genie Code `/analyze` or `/optimize` action for an insight-backed row when available, but treat the output as a candidate that must be validated.
+5. Confirm the generated SQL is semantically correct enough to optimize. If the query is answering the wrong business question, route to `semantic_wrong_sql`.
+6. Inspect Query Profile for the slowest operators, scans, joins, shuffles, sorts, aggregates, memory, rows, spill, queue symptoms, and Photon fallback.
+7. Inspect `system.query.history` for Genie-originated statements, durations, scan metrics, cache status, spill, queue time, and warehouse ID when system tables are accessible.
+8. Inspect the Space sources and instructions that influence query shape, including broad source scope, hidden/exposed columns, joins, SQL snippets, examples, and Metric Views.
+9. Inspect source objects for layout, statistics, clustering, partitioning, predictive optimization, and whether views or materialized views would reduce repeated work.
+10. Inspect warehouse settings and events after separating query-shape and table-layout causes from queue, startup, memory, and concurrency causes.
 
 Do not use aggregate latency alone as proof of root cause. Separate compile time, queue time, execution time, scan volume, spill, and result fetch time.
 
@@ -41,6 +47,25 @@ Do not use aggregate latency alone as proof of root cause. Separate compile time
 - Warehouses system table: https://docs.databricks.com/aws/en/admin/system-tables/warehouses
 - Warehouse events system table: https://docs.databricks.com/aws/en/admin/system-tables/warehouse-events
 - Predictive optimization system table: https://docs.databricks.com/aws/en/admin/system-tables/predictive-optimization
+
+## Benchmark And Insights Workflow
+
+Query performance insights are a Private Preview Databricks feature. If the Insights column, lightbulb indicator, or Genie Code action is absent, say so and use the fallback workflow below.
+
+When Insights are available:
+
+1. Run only the approved benchmark scope and capture the exact run window.
+2. In Query History, filter by benchmark window, Space, warehouse, user, statement ID, query source, or available tags.
+3. Sort or scan for rows with performance insights before manually reviewing slow rows without insights.
+4. For each candidate, record the benchmark question, statement ID, insight labels, duration breakdown, warehouse, cache status, and statement preview.
+5. Click the Query History Genie Code `/analyze` or `/optimize` action when available. Keep its candidate rewrite or recommendation only after semantic and profile validation.
+6. Group candidates by repeated insight label, SQL shape, source object, and benchmark question pattern so recommendations address durable workload behavior.
+
+Fallback when Insights are absent or inaccessible:
+
+- Inspect slow and expensive benchmark queries from Query History by duration, scan bytes, spill, queue time, and cache status.
+- Open Query Profile for representative rows and classify using the manual issue taxonomy.
+- State the limitation as preview/access/missing-insight evidence, not as a healthy-performance signal.
 
 ## Read-Only SQL Templates
 
@@ -266,25 +291,49 @@ If only the Query History row is available, use the `statement_id` and workspace
 
 ## Issue Taxonomy
 
-| Issue | Evidence | Preferred routing |
-|---|---|---|
-| `warehouse_queue` | High `waiting_at_capacity_duration_ms`, queued queries, warehouse events near load spikes | Warehouse max clusters, serverless/IWM, scheduling, or workload isolation |
-| `warehouse_startup` | High `waiting_for_compute_duration_ms`, stopped warehouse, cold starts dominate total duration | Auto-stop review, serverless warehouse, scheduled warmup only if justified |
-| `warehouse_memory_spill` | High `spilled_local_bytes`, Query Profile spill on joins/sorts/aggregates | Reduce rows/columns first; then consider warehouse size if query work is necessary |
-| `scan_no_pruning` | High read files/bytes/rows, low pruned files, scan operators dominate | Add predicates, align with clustering/partition keys, table layout recommendation |
-| `missing_delta_stats` | Query insights or layout evidence show missing/incomplete data-skipping stats | Recommend Delta statistics/predictive optimization follow-up |
-| `missing_optimizer_stats` | Query insights or plan shows weak join/order choices and missing cost stats | Recommend optimizer statistics/predictive optimization follow-up |
-| `layout_key_mismatch` | Filters do not use clustering or partition columns; high scan bytes | Recommend query filter rewrite, liquid clustering key review, or source/view redesign |
-| `wide_projection` | `SELECT *`, projected wide columns, high read bytes relative to produced rows | Hide noisy columns, use narrower examples/snippets, project needed columns only |
-| `exploding_join` | Join output greatly exceeds input rows; duplicated entities; profile join dominates | Fix join condition, reduce input rows, clarify grain, prejoin or materialize stable relationship |
-| `selective_join_filter_late` | Selective filters applied after large joins | Push filters before joins, add source examples/snippets, or pre-filtered view |
-| `redundant_aggregation` | Aggregation does not change result or repeats upstream aggregation | Remove redundant aggregation or add constraints/upstream model guidance |
-| `many_join_planning_pressure` | Many joins/aggregations, high compilation time, complex plan | Prejoined view, materialized view, Metric View, or source scope reduction |
-| `metric_view_or_source_scope_too_broad` | Genie chooses broad raw source or many overlapping sources for simple questions | Focus Genie data sources, hide columns, prefer Metric View or curated view |
-| `photon_fallback` | Query Profile or insight shows non-Photon operation | Rewrite unsupported operation or accept fallback when correctness requires it |
-| `federated_pushdown_limit` | Foreign table query reads too much remote data or filters cannot push down | Rewrite pushdown-friendly predicates, use `AND` composition, materialize local Delta when appropriate |
-| `cache_only_speedup` | Fast run only from result cache; cold query remains slow or profile missing | Validate cold-query path with trivial change or uncached profile |
-| `semantic_wrong_sql` | SQL is fast or slow but answers the wrong business question | Stop performance tuning; hand off to `diagnose-genie-space` or `optimize-genie-space` |
+| Issue | Query performance insight labels | Evidence to verify | Preferred routing |
+|---|---|---|---|
+| `warehouse_queue` | `EXCESSIVE_QUEUE_TIME` | High `waiting_at_capacity_duration_ms`, queued queries, warehouse events near load spikes | Warehouse max clusters, serverless/IWM, scheduling, or workload isolation |
+| `warehouse_startup` | none documented | High `waiting_for_compute_duration_ms`, stopped warehouse, cold starts dominate total duration | Auto-stop review, serverless warehouse, scheduled warmup only if justified |
+| `warehouse_memory_spill` | `DATA_SPILL` | High `spilled_local_bytes`, Query Profile spill on joins/sorts/aggregates | Reduce rows/columns first; then consider warehouse size if query work is necessary |
+| `scan_no_pruning` | `COVERAGE_FILTER_KEYS_CLUSTERING`, `COVERAGE_FILTER_KEYS_PARTITIONING` | High read files/bytes/rows, low pruning, filters missing clustering or partition columns | Add predicates, align with clustering/partition keys, table layout recommendation |
+| `missing_delta_stats` | `COVERAGE_STATS_DELTA` | Data-skipping stats missing, partial, unavailable, unused, or layout evidence shows poor file skipping | Recommend Delta statistics/predictive optimization follow-up |
+| `missing_optimizer_stats` | `COVERAGE_STATS_OPTIMIZER` | Cost-based optimizer statistics missing/incomplete, weak join/order choices, high planning pressure | Recommend optimizer statistics/predictive optimization follow-up |
+| `layout_key_mismatch` | `COVERAGE_FILTER_KEYS_CLUSTERING`, `COVERAGE_FILTER_KEYS_PARTITIONING` | Filters do not use clustering or partition columns; high scan bytes | Recommend query filter rewrite, liquid clustering key review, or source/view redesign |
+| `wide_projection` | `WIDE_PROJECTION` | `SELECT *`, projected wide columns, high read bytes relative to produced rows | Hide noisy columns, use narrower examples/snippets, project needed columns only |
+| `exploding_join` | `EXPLODING_JOIN` | Join output greatly exceeds input rows; duplicated entities; profile join dominates | Fix join condition, reduce input rows, clarify grain, prejoin or materialize stable relationship |
+| `selective_join_filter_late` | `SELECTIVE_JOIN` | Selective filters applied after large joins | Push filters before joins, add source examples/snippets, or pre-filtered view |
+| `redundant_aggregation` | `REDUNDANT_AGGREGATION` | Aggregation does not change result or repeats upstream aggregation | Remove redundant aggregation or add constraints/upstream model guidance |
+| `data_skew` | `DATA_SKEW` | Uneven task time or input distribution in Query Profile | Salt keys, pre-aggregate, reduce skewed joins, or recommend upstream model change |
+| `concurrent_write_pressure` | `CONCURRENT_WRITE` | Concurrent Delta writes, retries, or write conflicts visible in history/profile | Scheduling, write isolation, or pipeline-owner follow-up |
+| `flow_full_recompute` | `FLOW_FULL_RECOMPUTE` | Flow planned as full recompute when incremental behavior is expected | Rewrite for incremental support or route to pipeline/data model owner |
+| `io_throttling` | `IO_THROTTLING` | Cloud storage throttling insight, IO wait symptoms | Admin/cloud limit follow-up; validate before query rewrite |
+| `many_join_planning_pressure` | none documented | Many joins/aggregations, high compilation time, complex plan | Prejoined view, materialized view, Metric View, or source scope reduction |
+| `metric_view_or_source_scope_too_broad` | can contribute to `WIDE_PROJECTION`, `EXPLODING_JOIN`, `SELECTIVE_JOIN` | Genie chooses broad raw source or many overlapping sources for simple questions | Focus Genie data sources, hide columns, prefer Metric View or curated view |
+| `photon_fallback` | `COVERAGE_PHOTON` | Query Profile or insight shows non-Photon operation | Rewrite unsupported operation or accept fallback when correctness requires it |
+| `federated_pushdown_limit` | none documented | Foreign table query reads too much remote data or filters cannot push down | Rewrite pushdown-friendly predicates, use `AND` composition, materialize local Delta when appropriate |
+| `cache_only_speedup` | none documented | Fast run only from result cache; cold query remains slow or profile missing | Validate cold-query path with trivial change or uncached profile |
+| `semantic_wrong_sql` | any label can coexist | SQL is fast or slow but answers the wrong business question | Stop performance tuning; hand off to `diagnose-genie-space` or `optimize-genie-space` |
+
+## Query Performance Insight Routing
+
+| Insight label | Owner | Preferred recommendation | Validation | Avoid |
+|---|---|---|---|---|
+| `CONCURRENT_WRITE` | Data model owner or pipeline owner | Review Delta history and schedule conflicting writes away from benchmark/query windows | Compare failed/retried query windows with write history and rerun affected benchmark questions | Rewriting correct read SQL as the first response |
+| `COVERAGE_FILTER_KEYS_CLUSTERING` | Genie space curator, data model owner, or table owner | Add semantically valid filters on clustering keys, or recommend clustering-key review when filters are durable | Re-run affected benchmark questions and confirm lower read bytes/files with unchanged answers | Adding artificial filters that change the requested result |
+| `COVERAGE_FILTER_KEYS_PARTITIONING` | Genie space curator, data model owner, or table owner | Add required partition filters when the business question implies them, or recommend partition design review | Confirm partition pruning and unchanged benchmark answers | Forcing partition filters when the user asked for all-time/all-partition results |
+| `COVERAGE_PHOTON` | Data model owner | Rewrite unsupported operations only when an equivalent Photon-friendly expression preserves correctness | Compare Query Profile operators and benchmark answers before/after approved rewrite | Sacrificing correctness just to avoid fallback |
+| `COVERAGE_STATS_DELTA` | Table owner | Recommend Delta statistics or predictive optimization follow-up | After approved maintenance, confirm lower scan bytes/files or better pruning on same benchmark questions | Running `ANALYZE` or maintenance inside this skill |
+| `COVERAGE_STATS_OPTIMIZER` | Table owner | Recommend optimizer statistics or predictive optimization follow-up | After approved maintenance, compare join/order choices, duration, and answer stability | Treating stats collection as a Genie Space edit |
+| `DATA_SKEW` | Data model owner or table owner | Reduce skewed join/aggregate input, pre-aggregate, salt keys, or redesign repeated heavy source pattern | Confirm more even task distribution and unchanged benchmark result | Blindly increasing warehouse size without checking query shape |
+| `DATA_SPILL` | Genie space curator, data model owner, or warehouse admin | Reduce rows/columns before joins/sorts/windows; consider warehouse size only if work is necessary | Compare spill bytes, top operators, and benchmark answers | Scaling compute as the first recommendation when projection/filter fixes exist |
+| `EXCESSIVE_QUEUE_TIME` | Warehouse admin | Increase max clusters, use serverless/IWM, isolate workloads, or reschedule benchmark/load | Compare queue metrics across equivalent benchmark windows | Rewriting correct SQL when execution time is already acceptable |
+| `EXPLODING_JOIN` | Genie space curator or data model owner | Fix join grain/condition, reduce inputs, clarify source descriptions, or recommend prejoined/materialized source | Confirm join output/input ratio drops and benchmark answer is unchanged | Masking grain problems with `DISTINCT` |
+| `FLOW_FULL_RECOMPUTE` | Pipeline owner or data model owner | Rewrite or redesign the flow for incremental support when applicable | Compare flow planning mode and bytes read after approved pipeline change | Applying Delta layout advice to an incremental-planning problem |
+| `IO_THROTTLING` | Workspace/cloud admin | Investigate cloud storage request limits and IO pressure | Compare throttling signals across rerun or similar windows | Treating throttling as a Genie prompt problem |
+| `REDUNDANT_AGGREGATION` | Genie space curator or data model owner | Remove redundant aggregation or add upstream constraints/model guidance | Confirm result set is identical and profile removes unnecessary aggregate | Removing aggregation before proving it is redundant |
+| `SELECTIVE_JOIN` | Genie space curator or data model owner | Push selective filters before joins, add reusable snippets/examples, or recommend pre-filtered source | Confirm lower input rows to joins and unchanged answer | Adding benchmark-specific examples that leak expected answers |
+| `WIDE_PROJECTION` | Genie space curator or data model owner | Project only needed columns, hide noisy/wide columns, improve examples/snippets, or prefer curated source | Confirm projected columns and read bytes decrease while answer shape is unchanged | Relying only on a broad text instruction like "avoid SELECT *" |
 
 ## Evidence-To-Lever Routing
 
@@ -316,9 +365,10 @@ Use clear owners in reports:
 
 Validate recommendations without mutating assets during this skill:
 
-- Re-run or inspect the same question with a cold Query Profile when possible.
-- Compare answer shape and key totals before and after any approved follow-up change.
+- Re-run or inspect the same benchmark questions with a cold Query Profile when possible.
+- Compare answer shape, key totals, and benchmark assessment before and after any approved follow-up change.
 - Check `total_duration_ms`, queue durations, execution duration, read bytes, read files, read rows, produced rows, spill bytes, and top operators.
+- For insight-backed candidates, confirm the insight label is consistent with Query Profile and Query History evidence before recommending a lever.
 - For warehouse recommendations, compare queue/startup metrics across similar workload windows.
 - For table-layout recommendations, confirm filters match clustering, partitioning, or statistics columns and that read bytes/files decrease after approved maintenance.
 - For source/model recommendations, run affected Genie questions and related correctness checks through `diagnose-genie-space` or `optimize-genie-space` when answer quality could change.
@@ -329,41 +379,49 @@ Validate recommendations without mutating assets during this skill:
 # Genie Query Optimization: <space>
 
 ## Case
-- Question:
-- Statement ID:
+- Benchmark:
+- Benchmark run/window:
+- Questions:
 - Warehouse:
-- Time window:
 - Goal:
 - Correctness status:
+
+## Insight Triage
+- Insights availability:
+- Insight-backed candidates:
+- Statement IDs:
+- Insight labels:
+- Repeated patterns:
+- Access limitations:
 
 ## Workload Evidence
 - Query history:
 - Duration breakdown:
 - Scan/result ratio:
-- Repeated patterns:
 - Cache status:
 
 ## Query Plan Findings
-| Severity | Issue | Evidence | Recommendation | Owner | Validation | Risk |
-|---|---|---|---|---|---|---|
+| Severity | Insight/Issue | Statement ID | Evidence | Recommendation | Owner | Validation | Risk |
+|---|---|---|---|---|---|---|---|
 
 ## Warehouse Findings
-| Severity | Issue | Evidence | Recommendation | Owner | Validation | Risk |
-|---|---|---|---|---|---|---|
+| Severity | Insight/Issue | Statement ID | Evidence | Recommendation | Owner | Validation | Risk |
+|---|---|---|---|---|---|---|---|
 
 ## Table And Layout Findings
-| Severity | Issue | Evidence | Recommendation | Owner | Validation | Risk |
-|---|---|---|---|---|---|---|
+| Severity | Insight/Issue | Statement ID | Evidence | Recommendation | Owner | Validation | Risk |
+|---|---|---|---|---|---|---|---|
 
 ## Recommendations
-| Priority | Lever | Change | Why | Validation |
+| Priority | Lever | Change Or Candidate Rewrite | Why | Validation |
 |---|---|---|---|---|
 
 ## Validation Plan
+- Benchmark re-run:
+- Unchanged answer check:
 - Read-only check:
 - Query Profile check:
 - Warehouse check:
-- Expected unchanged answer:
 
 ## Limitations
 - Missing evidence:

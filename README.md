@@ -26,7 +26,7 @@ This repository has two skill distributions:
 | **[genie-code/create-genie-space](./genie-code/create-genie-space/)** | Create or refine Genie Spaces using Genie Code's native Unity Catalog and workspace context |
 | **[genie-code/diagnose-genie-space](./genie-code/diagnose-genie-space/)** | Diagnose Genie Space quality and benchmark health issues inside Databricks without external setup |
 | **[genie-code/optimize-genie-space](./genie-code/optimize-genie-space/)** | Tune Genie Space quality with Databricks-native benchmark review, repair, pruning, and iteration |
-| **[genie-code/optimize-genie-query](./genie-code/optimize-genie-query/)** | Analyze Genie Space generated SQL, Query Profile, table layout, and SQL warehouse performance without making changes |
+| **[genie-code/optimize-genie-query](./genie-code/optimize-genie-query/)** | Run approved benchmark-driven Genie query triage using Query History performance insights, Query Profile, table layout, and warehouse evidence |
 
 ## Setup
 
