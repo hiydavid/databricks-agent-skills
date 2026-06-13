@@ -5,11 +5,12 @@ Use this reference when tuning a Genie Space in Databricks-native workflows.
 ## Navigation
 
 - `Core Principle`: repair failed benchmark evidence with the smallest structured Genie context change.
+- `Read-Only SQL Inspection`: inspect evidence without mutating data, schemas, warehouses, or benchmark definitions through SQL.
 - `Benchmark Integrity`, `Benchmark Difficulty`, `Benchmark Repair`, and `Benchmark Pruning`: review, repair, or prune benchmarks before tuning.
 - `Repair Decision Stack`, `Judge-Style Failure Triage`, `Failure Clustering`, and `Failure-to-Lever Routing`: classify valid failures and choose the repair lever.
 - `Proactive Enrichment Before Repair` and `Text Instruction Last-Resort Rule`: prevent broad or leaky edits.
 - `Evaluation Gates`, `Acceptance Decision`, `Iteration Reflection`, and `Genie Repair Plan`: run and document candidate passes.
-- `Optional Unity Catalog Table Persistence`: record auditable multi-pass history only after user approval.
+- `Local Workspace File Persistence`: record auditable multi-pass history in an approved user workspace folder.
 
 ## Core Principle
 
@@ -25,13 +26,21 @@ Translate failed benchmark evidence into structured Genie context. Prefer this o
 
 Benchmarks evaluate quality. They do not teach Genie by themselves. Do not copy benchmark questions, answer SQL, or evaluation-note wording into sample questions, snippets, examples, or text instructions.
 
+## Read-Only SQL Inspection
+
+Use SQL only for bounded inspection and validation. Allowed statements are `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, read-only `information_schema`, and read-only system-table queries.
+
+Do not run DDL, DML, maintenance commands, schema or object mutations, warehouse edits, benchmark edits through SQL, or source-data writes. This includes `CREATE`, `ALTER`, `DROP`, `TRUNCATE`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `COPY INTO`, `OPTIMIZE`, `VACUUM`, `ANALYZE`, refresh operations, table rewrites, permission changes, and warehouse configuration changes.
+
+Keep inspection bounded with explicit limits for samples and targeted aggregate checks for validation, cardinality, null rates, categorical values, join grain, metric semantics, and date logic.
+
 ## Benchmark Integrity
 
 Before tuning, review whether the benchmark is useful:
 
 - Identify the target benchmark execution mode: Chat, Agent, or mixed. Benchmark records are shared definitions; execution mode controls whether Databricks scores SQL/result-set match or whole-response quality.
 - At least 30 valid benchmark items for the target execution mode before benchmark-driven tuning.
-- Chat execution needs deterministic questions with checked SQL answers.
+- Chat execution needs deterministic questions with checked SQL answers. SQL-backed items count as valid only after the SQL has been checked against the current schema and business definition.
 - Agent execution needs clear questions and evaluation notes when the expected response needs grading guidance.
 - Mixed execution should use one shared benchmark set with per-question SQL answers, evaluation notes, or both, based on answer shape.
 - Coverage across source selection, Metric View measures, dimensions, filters, joins, date logic, ranking, aggregation grain, answer shapes, and Agent response quality when applicable.
@@ -40,6 +49,7 @@ Before tuning, review whether the benchmark is useful:
 - No duplicates that only change a category or date.
 - No answer SQL that errors, uses stale fields, or encodes the wrong business definition.
 - No Agent evaluation note that is vague, contradictory, or asks the judge to reward unsupported claims.
+- SQL-backed items whose expected SQL cannot be checked are excluded from the valid denominator or treated as diagnostic-only until repaired.
 
 If benchmark quality is insufficient or the benchmark is oversized, do a dedicated benchmark repair or pruning pass first. Do not mix benchmark repair or pruning with Genie tuning.
 
@@ -59,22 +69,23 @@ Use benchmark repair when fewer than 30 valid benchmark items remain for the tar
 
 Use benchmark pruning when the benchmark started with too many questions for practical iteration or contains many redundant variants. Pruning is benchmark repair: get approval first, change only benchmark definitions, and do not tune Genie configuration in the same pass.
 
-A valid benchmark item has a current, non-trivial question plus enough ground truth for the intended execution mode:
+A valid benchmark item has a current, non-trivial question plus enough checked ground truth for the intended execution mode:
 
-- `single_sql_answer`: add a checked SQL answer for deterministic tabular questions.
-- `deterministic_with_response_quality`: add checked SQL and an evaluation note when Chat correctness and Agent response quality both matter.
+- `single_sql_answer`: add a checked SQL answer for deterministic tabular questions. Do not count the item as valid until the SQL is checked.
+- `deterministic_with_response_quality`: add checked SQL and an evaluation note when Chat correctness and Agent response quality both matter. Do not count the item as valid until the SQL is checked.
 - `multi_step_agent_analysis`: add an evaluation note only when the question requires multiple investigative queries, synthesis, caveats, citations, visualizations, or supporting tables rather than one canonical result set.
 - `ambiguous_or_unverifiable`: ask the user for expected behavior before adding or repairing the item.
 
-Checked SQL should match the current schema and business definition, run successfully or have read-only validation evidence, and avoid obsolete tables, columns, filters, or Metric View assumptions. Evaluation notes should state the expected content, evidence, caveats, and response-quality criteria without prescribing a hidden one-off answer.
+Checked SQL must match the current schema and business definition, run successfully or have read-only validation evidence, and avoid obsolete tables, columns, filters, or Metric View assumptions. If SQL validation is unavailable or fails, exclude the item from the valid denominator or mark it diagnostic-only until repaired. Evaluation notes should state the expected content, evidence, caveats, and response-quality criteria without prescribing a hidden one-off answer.
 
-Before changing benchmark definitions, get user approval and keep the pass limited to benchmark definitions. Do not mix benchmark repair or pruning with Genie tuning.
+Before changing benchmark definitions, capture a rollback-ready before snapshot, present exact before/after benchmark definition changes, get user approval, and keep the pass limited to benchmark definitions. Do not mix benchmark repair or pruning with Genie tuning.
 
 For each added, replaced, retained, or pruned benchmark item, record:
 
 - question text;
 - benchmark field strategy: SQL, evaluation note, both, or excluded;
 - expected SQL and validation notes, when SQL is appropriate;
+- exact before/after benchmark definition changes for added, replaced, retained, or pruned items;
 - evaluation note, when Agent execution needs response-grading guidance;
 - difficulty level;
 - coverage category, such as source routing, Metric View measure, filter, join, time logic, ranking, aggregation grain, answer shape, multi-query investigation, evidence quality, or response synthesis;
@@ -82,7 +93,7 @@ For each added, replaced, retained, or pruned benchmark item, record:
 - whether it adds coverage, replaces an invalid, stale, duplicate, or trivial question, or is retained as a representative item;
 - pruning rationale when removed or excluded.
 
-Repair enough benchmark items to reach at least 30 valid items for the target execution mode. When pruning, retain a compact representative set with at least 30 valid items unless the user explicitly accepts a smaller diagnostic-only set. After benchmark repair or pruning, run the relevant native benchmark evaluation, wait for completed per-question output, and use that result as the new baseline before starting Genie tuning.
+Repair enough benchmark items to reach at least 30 valid items for the target execution mode. Count only checked SQL-backed items, intentionally Agent-only items with clear evaluation notes, or mixed items with the required checked SQL and notes. When pruning, retain a compact representative set with at least 30 valid items unless the user explicitly accepts a smaller diagnostic-only set. After benchmark repair or pruning, run the relevant native benchmark evaluation, wait for completed per-question output, and use that result as the new baseline before starting Genie tuning.
 
 ## Benchmark Pruning
 
@@ -135,8 +146,10 @@ Before applying a Space/config edit, answer:
    - Identify affected benchmark question IDs and related previous-good regression questions.
 6. What should be recorded for the next loop?
    - Cluster, attempted lever, expected impact, result, regressions, and whether to retry or avoid the approach.
+7. What exact edit is being approved?
+   - Record the before value, proposed after value, affected surface, rollback snapshot reference, expected fixes, regression questions, and evaluation gate.
 
-Every tuning pass must name the target failure cluster and repair lever before editing the Space/config.
+Every tuning pass must name the target failure cluster, repair lever, rollback snapshot reference, and exact proposed edit before editing the Space/config.
 
 ## Judge-Style Failure Triage
 
@@ -175,7 +188,7 @@ Rules:
 
 ## Failure Clustering
 
-Cluster valid tuning failures before each candidate edit. Prefer one failure cluster or a small related cluster set per pass.
+Cluster valid tuning failures before each candidate edit. Prefer one primary failure cluster per pass. Include multiple clusters only when they share the same root cause, repair surface, primary repair lever, and validation slice.
 
 ```markdown
 ## Failure Clusters
@@ -294,6 +307,7 @@ After comparing reports, add an explicit keep/revise/rollback decision:
 - Baseline report:
 - Candidate report:
 - Candidate config or Space version:
+- Rollback snapshot reference:
 - Benchmark execution target:
 - Benchmark field strategy:
 - Valid denominator used:
@@ -310,7 +324,7 @@ After comparing reports, add an explicit keep/revise/rollback decision:
 - Rollback action, if needed:
 ```
 
-Keep the candidate only when it improves the valid benchmark score or fixes the target cluster without unacceptable regressions. Roll back or revise when the candidate only shifts failures, creates new syntax/infra issues, or depends on benchmark leakage.
+Keep the candidate only when it improves the valid benchmark score or fixes the target cluster without unacceptable regressions and has a recorded rollback snapshot reference. Roll back or revise when the candidate only shifts failures, creates new syntax/infra issues, depends on benchmark leakage, or lacks enough rollback information to safely continue.
 
 ## Iteration Reflection
 
@@ -342,6 +356,7 @@ Use this template for each candidate pass:
 - Benchmark execution target:
 - Benchmark field strategy:
 - Invalid expected SQL, unclear evaluation notes, or stale benchmark questions:
+- Unchecked SQL-backed questions excluded from valid denominator:
 - Permissions, platform, warehouse, or incomplete-eval issues:
 - Questions excluded from tuning denominator:
 
@@ -357,16 +372,22 @@ Use this template for each candidate pass:
 - Target cluster:
 - Smallest repair lever:
 - Space/config surface to edit:
+- Rollback snapshot reference:
+- Current value or before config:
+- Exact proposed after value, text, or config snippet:
+- Approval request includes exact edit? yes/no:
 - Why this should fix the cluster:
 - Why this is not benchmark leakage:
 - Why this should not regress related questions:
 
-### UC table persistence
-- Approved catalog.schema, if any:
-- Config version row written? yes/no:
-- Eval result rows written? yes/no:
-- Repair analysis row written? yes/no:
-- Run summary row updated? yes/no:
+### Local workspace persistence
+- Approved workspace folder, if any:
+- Before config snapshot written? yes/no:
+- Rollback snapshot reference:
+- Candidate config snapshot written? yes/no:
+- Eval result files written? yes/no:
+- Repair analysis written? yes/no:
+- Run summary and reflection written? yes/no:
 
 ### Evaluation gate
 - Affected question IDs:
@@ -389,38 +410,45 @@ Use this template for each candidate pass:
 - Next repair hypothesis:
 ```
 
-## Optional Unity Catalog Table Persistence
+## Local Workspace File Persistence
 
-Use Unity Catalog managed Delta tables only when the user approves a catalog/schema location for optimization history. This is optional. Continue the repair loop using native benchmark output when persistence is not approved or unavailable.
+Use local workspace files for optimization history. Before any Space/config or benchmark-definition edit, require an approved workspace folder for the minimal rollback snapshot. Prefer a folder in the current user's workspace, such as `/Workspace/Users/<username>/genie_optimization/<space_id>/`. Broader run history, eval logging, and event logging are optional; continue the repair loop using native benchmark output when broader persistence is not approved or workspace-file writes beyond the rollback snapshot are unavailable.
 
-Write only optimization history to these tables. Do not modify source-data tables, views, Metric Views, schemas, benchmark answers, or source data as part of Genie config tuning.
+Write only optimization history inside the approved folder. Do not create or mutate source-data tables, views, Metric Views, schemas, benchmark answers, source data, or unrelated workspace assets as part of persistence.
 
-Recommended default: four tables.
+Minimize what is written. Store raw result samples only when needed to explain or reproduce a decision; otherwise prefer hashes, row counts, digests, and concise summaries. Redact sensitive literals in questions, SQL, judge notes, errors, and config text when possible without losing the evidence needed for rollback or comparison. Confirm the approved workspace folder is appropriate for the sensitivity of the Space config, benchmark text, generated SQL, and evaluation notes.
 
-| Table | Grain | Purpose |
-|---|---|---|
-| `<catalog>.<schema>.genie_opt_runs` | one optimization pass / candidate edit | Run ledger, parent/child linkage, summary metrics, decision |
-| `<catalog>.<schema>.genie_opt_config_versions` | one Space/config snapshot | Before/after snapshots, config hash, rollback reference |
-| `<catalog>.<schema>.genie_opt_eval_results` | one question result per eval run | Question-level benchmark logging, triage, movement analysis |
-| `<catalog>.<schema>.genie_opt_repair_analysis` | one failure cluster / repair hypothesis per pass | Root-cause analysis, chosen lever, evidence, reflection |
-
-Use the four-table design for long-running or auditable sessions. The `genie_opt_runs` table is the coordinator that connects the candidate edit, parent run, config versions, eval rows, and keep/revise/rollback decision.
-
-Minimum viable alternative: three tables.
+Recommended default layout:
 
 ```text
-genie_opt_runs                 # include repair analysis JSON/Markdown in this table
-genie_opt_config_versions
-genie_opt_eval_results
+<workspace-history-root>/
+  runs/
+    <run_id>.json
+    <run_id>.md
+  config_versions/
+    <config_version_id>.json
+  eval_results/
+    <eval_run_id>.jsonl
+  repair_analysis/
+    <run_id>_<cluster_id>.md
+  events.jsonl
 ```
 
-Use a single append-only event table only when the user prioritizes setup simplicity over typed queries:
+Use the JSON and Markdown files for long-running or auditable sessions. The run JSON is the coordinator that connects the candidate edit, parent run, config versions, eval files, repair analysis, and keep/revise/rollback decision. The Markdown files are for human review in the workspace UI. The append-only `events.jsonl` file is optional but useful when the user wants a simple chronological ledger.
+
+Minimum viable layout:
 
 ```text
-genie_opt_events
+<workspace-history-root>/
+  runs/
+    <run_id>.md
+  config_versions/
+    <config_version_id>.json
+  eval_results/
+    <eval_run_id>.jsonl
 ```
 
-Allowed event types:
+Allowed event types for `events.jsonl`:
 
 ```text
 run_started
@@ -431,20 +459,23 @@ candidate_decision
 iteration_reflection
 ```
 
-Recommended stable columns:
+Recommended stable fields:
 
-- `genie_opt_runs`: `run_id`, `session_id`, `space_id`, `space_name`, `benchmark_execution_target`, `benchmark_id`, `benchmark_version_or_hash`, `iteration`, `parent_run_id`, `baseline_config_version_id`, `candidate_config_version_id`, `target_cluster`, `repair_lever`, `status`, `started_at`, `ended_at`, `baseline_score`, `candidate_score`, `score_delta`, `fixed_count`, `regressed_count`, `unchanged_bad_count`, `unchanged_good_count`, `excluded_count`, `decision`, `notes`.
-- `genie_opt_config_versions`: `config_version_id`, `run_id`, `space_id`, `version_label`, `parent_config_version_id`, `captured_at`, `captured_by`, `config_hash`, `config_json`, `changed_surfaces`, `change_summary`.
-- `genie_opt_eval_results`: `eval_result_id`, `eval_run_id`, `run_id`, `space_id`, `benchmark_id`, `benchmark_version_or_hash`, `eval_type`, `evaluated_at`, `question_id`, `question_text`, `benchmark_field_strategy`, `assessment`, `valid_tuning_failure`, `exclusion_reason`, `primary_failure`, `secondary_signal`, `failure_cluster`, `expected_sql_hash`, `generated_sql_hash`, `generated_sql`, `evaluation_note_hash`, `expected_result_digest`, `actual_result_digest`, `judge_notes`, `latency_ms`, `error_message`.
-- `genie_opt_repair_analysis`: `analysis_id`, `run_id`, `space_id`, `created_at`, `cluster_id`, `affected_question_ids`, `root_cause`, `evidence_summary`, `selected_lever`, `rejected_levers`, `config_surface`, `planned_patch_summary`, `expected_fix_count`, `regression_risk`, `benchmark_leakage_check`, `acceptance_decision`, `reflection`, `next_hypothesis`.
-- `genie_opt_events`: `event_id`, `event_ts`, `event_type`, `session_id`, `run_id`, `space_id`, `config_version_id`, `eval_run_id`, `question_id`, `payload_json`.
+- Run JSON: `run_id`, `session_id`, `space_id`, `space_name`, `benchmark_execution_target`, `benchmark_id`, `benchmark_version_or_hash`, `iteration`, `parent_run_id`, `baseline_config_version_id`, `candidate_config_version_id`, `target_cluster`, `repair_lever`, `status`, `started_at`, `ended_at`, `baseline_score`, `candidate_score`, `score_delta`, `fixed_count`, `regressed_count`, `unchanged_bad_count`, `unchanged_good_count`, `excluded_count`, `decision`, `rollback_reference`, `notes`.
+- Config version JSON: `config_version_id`, `run_id`, `space_id`, `version_label`, `parent_config_version_id`, `captured_at`, `captured_by`, `config_hash`, `config_json`, `changed_surfaces`, `change_summary`, `rollback_reference`.
+- Eval result JSONL record: `eval_result_id`, `eval_run_id`, `run_id`, `space_id`, `benchmark_id`, `benchmark_version_or_hash`, `eval_type`, `evaluated_at`, `question_id`, `question_text`, `benchmark_field_strategy`, `assessment`, `valid_tuning_failure`, `exclusion_reason`, `primary_failure`, `secondary_signal`, `failure_cluster`, `expected_sql_hash`, `generated_sql_hash`, `generated_sql`, `evaluation_note_hash`, `expected_result_digest`, `actual_result_digest`, `judge_notes`, `latency_ms`, `error_message`.
+- Repair analysis Markdown metadata: `analysis_id`, `run_id`, `space_id`, `created_at`, `cluster_id`, `affected_question_ids`, `root_cause`, `evidence_summary`, `selected_lever`, `rejected_levers`, `config_surface`, `planned_patch_summary`, `expected_fix_count`, `regression_risk`, `benchmark_leakage_check`, `acceptance_decision`, `reflection`, `next_hypothesis`.
+- Event JSONL record: `event_id`, `event_ts`, `event_type`, `session_id`, `run_id`, `space_id`, `config_version_id`, `eval_run_id`, `question_id`, `payload_json`.
 
 When persistence is enabled for each candidate pass:
 
-1. Write a run row.
-2. Capture the before config snapshot.
-3. Write repair analysis before editing.
-4. Apply the focused Space/config edit.
-5. Capture the after config snapshot.
-6. Write question-level eval results.
-7. Update the run summary, acceptance decision, and iteration reflection.
+1. Create or reuse the approved workspace history folder.
+2. Write the run JSON or run Markdown entry.
+3. Capture the before config snapshot before editing.
+4. Write repair analysis before editing.
+5. Apply the focused Space/config edit.
+6. Capture the candidate config snapshot.
+7. Write question-level eval results.
+8. Write the run summary, acceptance decision, and iteration reflection.
+
+When only the mandatory rollback snapshot is enabled, write at minimum the before config snapshot, snapshot timestamp, Space identifier, editor identity when available, config hash, and rollback reference before editing. Do not proceed with a mutation if the rollback snapshot cannot be captured.
