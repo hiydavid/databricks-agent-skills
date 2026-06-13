@@ -9,13 +9,15 @@ Start from the user's actual intent:
 - Capture purpose, audience, draft title, and 3-5 concrete business questions.
 - Capture business terms, metric definitions, fiscal/calendar conventions, default filters, security caveats, and benchmark mode.
 - If objects are not specified, search or browse with exact terms, synonyms, abbreviations, related entities, and common fact/dimension naming patterns.
-- Recommend a focused source set, ideally 5 or fewer objects initially, and explain how each source maps to the business questions.
+- Recommend a focused source set, ideally 5 or fewer objects initially and never above the documented 30-table/view Space limit, and explain how each source maps to the business questions.
 
 Before deeper profiling, check feasibility. Flag missing measures, dimensions, time fields, Metric View measures, or join paths. Let the user add sources, adjust questions, or proceed with explicit limitations.
 
+Before proposing live creation or updates, confirm the Space uses Unity Catalog data, the editor has required Genie and data permissions, a pro or serverless SQL warehouse is available with `CAN USE`, and the draft stays within documented limits: 30 tables/views, 100 instructions, 200 knowledge store snippets, and 500 benchmark questions.
+
 ## Read-Only Discovery And Profiling
 
-Use workspace metadata first, then run focused read-only SQL only when metadata is not enough. Use `references/data-profiling-and-readiness.md` for SQL templates covering structure, row counts, grain, freshness/date ranges, null/empty/constant columns, cardinality, casing, boolean-as-string values, join overlap, Metric View `MEASURE()` behavior, PII/ETL/noisy fields, usage/lineage, and per-question readiness.
+Use workspace metadata first, then run focused read-only SQL only when metadata is not enough. Prefer narrow previews, filters, samples, and `EXPLAIN`; use broad full-table scans only when necessary and approved. Use `references/data-profiling-and-readiness.md` for SQL templates covering structure, row counts or estimates, grain, freshness/date ranges, null/empty/constant columns, cardinality, casing, boolean-as-string values, join cardinality, Metric View `MEASURE()` behavior, PII/ETL/noisy fields, usage/lineage, and per-question readiness.
 
 ## Design Priorities
 
@@ -25,7 +27,7 @@ Prefer structured context over broad instructions:
 2. Focused data source selection.
 3. Table, Metric View, and column descriptions.
 4. Synonyms and display names for business terms.
-5. Format assistance and entity matching for eligible categorical strings.
+5. Format assistance and entity matching for eligible categorical strings after prompt matching safety review.
 6. Join specs for raw tables exposed together.
 7. SQL snippets for reusable filters, expressions, and measures not already governed by Metric Views.
 8. Example SQL for complex question patterns.
@@ -47,6 +49,13 @@ Use text instructions only for global behavior that cannot be encoded structural
 - Possible overreach or regression risk:
 - How the instruction will be reviewed or validated:
 ```
+
+## Prompt Matching Safety
+
+- Representative values for prompt matching are generated using the author's permissions and become part of the Space's shared context.
+- Enable entity matching only for stable string columns users are likely to mention, such as state codes, product categories, statuses, or departments.
+- Disable or avoid format assistance and entity matching on sensitive fields, high-cardinality identifiers, free text, and any view that references row filters, column masks, or dynamic-view security logic unless the user explicitly confirms the values are safe to share with Space users.
+- If prompt matching values might expose data outside the intended audience, do not enable them; hide the column or document the security caveat instead.
 
 ## Metric View Guidance
 
@@ -80,10 +89,11 @@ Before proposing a live change, summarize High/Medium/Low confidence for each bu
 Check the draft for:
 
 - A focused source set, ideally 5 or fewer at first.
+- Required permissions, pro/serverless SQL warehouse availability, Unity Catalog data access, and documented limits are satisfied before live creation or update.
 - Descriptions that state business purpose and grain.
 - Hidden ingestion, audit, hash, raw JSON, embedding, and sensitive free-text fields.
-- Prompt matching only on useful eligible categorical strings.
-- Joins supported by constraints, naming, row-count checks, or user confirmation.
+- Prompt matching only on useful eligible categorical strings after checking shared-context exposure, row filters, column masks, and dynamic views.
+- Joins supported by constraints, naming, cardinality/duplicate-key checks, query history, or user confirmation.
 - No long rulebook-style text instructions.
 - Text instructions only for global behavior that cannot be encoded structurally, with adapted justification when proposed or edited.
 - Example SQL that teaches reusable patterns, not memorized test questions.
