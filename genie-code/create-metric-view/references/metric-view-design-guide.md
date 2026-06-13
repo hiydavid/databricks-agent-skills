@@ -17,6 +17,7 @@ Official Databricks references:
 
 - Design Intake
 - Feasibility Check
+- Feature Availability
 - Source Choice
 - Fields
 - Measures
@@ -50,6 +51,18 @@ Before authoring YAML, classify each KPI and question:
 - **Low:** missing source, metric formula, denominator, dimension, time field, scope rule, or join evidence.
 
 Do not present Low-confidence items as implemented. Either remove them from the draft, ask for expert input, or label the Metric View as an incomplete draft.
+
+## Feature Availability
+
+Treat feature availability as an environment capability check, not as a user preference. In Genie Code, inspect workspace signals, compiler feedback, and current Databricks docs where possible; do not ask the user to choose a runtime.
+
+As of June 2026:
+
+- Metric View feature support varies by active Databricks SQL and Databricks Runtime surface.
+- YAML `version: 1.1` agent metadata requires agent-metadata support, documented for Databricks Runtime 17.3 or above and compatible Databricks SQL behavior.
+- `rely.at_most_one_match: true` requires both proven uniqueness and support for the join optimization, documented for Databricks Runtime 18.1 or above and compatible Metric View environments.
+- `one_to_many`, nested joins, materialization, and other advanced modeling features should be checked against current feature availability before drafting live DDL.
+- If support cannot be confirmed, omit the gated syntax and list it as an optional enhancement with the required capability.
 
 ## Source Choice
 
@@ -105,7 +118,7 @@ Use model-level `filter` only for scope that should apply to every query against
 Metric View joins commonly model star or snowflake schemas. By default, joins are many-to-one dimension lookups.
 
 - Validate many-to-one joins with constraints, distinct-count checks, row overlap checks, query history, lineage, or data-owner confirmation.
-- Use `rely.at_most_one_match: true` only when the uniqueness condition genuinely holds. Databricks does not validate it at runtime.
+- Use `rely.at_most_one_match: true` only when the uniqueness condition genuinely holds and the active environment supports the optimization. Databricks does not validate uniqueness at runtime.
 - Use `one_to_many` only for intended multi-grain metrics, such as a customer-grain source with order facts below it. Confirm runtime/version support.
 - For nested one-to-many joins, watch for accidental double counting and use distinct counts where needed.
 - For multiple fact tables at different grains, consider a bridge source that enumerates valid dimension combinations instead of ad hoc fanout.
@@ -113,9 +126,10 @@ Metric View joins commonly model star or snowflake schemas. By default, joins ar
 
 ## Agent Metadata
 
-Use YAML `version: 1.1` by default for agent metadata. Agent metadata requires Databricks Runtime 17.3 or above and improves AI/BI interpretation, but it must be grounded.
+Use YAML `version: 1.1` when the active environment supports agent metadata. Agent metadata requires Databricks Runtime 17.3 or above, or compatible Databricks SQL support, and improves AI/BI interpretation, but it must be grounded.
 
-- Add `comment` for every source, important field, measure, filter, and non-obvious join.
+- Add `comment` for the Metric View, important fields, and measures where supported by the YAML reference.
+- Explain source choices, model-level filters, joins, and other non-obvious assumptions in the top-level Metric View comment or output summary unless current syntax explicitly supports metadata on that object.
 - Add `display_name` when the technical `name` is not the business label.
 - Add `synonyms` for real business terms, abbreviations, and common phrasing. Do not pad synonyms with guesses.
 - Add `format` for currency, percentages, dates, decimals, and large numbers when the business format is known.
@@ -130,6 +144,8 @@ Recommend it only when:
 - The Metric View has repeated workload patterns or known dashboard/Genie/alert queries.
 - Query history or benchmarks show expensive aggregations that are stable enough to precompute.
 - Refresh cost, freshness, permissions, and maintenance ownership are acceptable.
+- The workspace supports Metric View materialization. As of June 2026, materialized Metric Views are Public Preview and use serverless compute.
+- Any `relaxed` query rewrite behavior is acceptable for the business freshness and determinism requirements.
 
 Do not add materialization to hide an unclear model or an unvalidated join.
 
@@ -144,6 +160,7 @@ Before presenting live DDL, confirm:
 - Fields are useful for grouping/filtering and avoid noisy or sensitive data.
 - Model-level filters are governed scope rules, not default exploration filters.
 - Joins have validated cardinality; `rely` is used only with proof or confirmation.
+- Feature-gated syntax is included only when active environment support is confirmed.
 - Representative queries list fields and use `MEASURE()` for measures.
 - The proposed DDL target is fully qualified and approved before execution.
 - Downstream Genie Spaces can attach the Metric View without duplicating its formulas.

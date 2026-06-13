@@ -9,12 +9,13 @@ Create a governed Unity Catalog Metric View from Databricks-native context. Rely
 
 ## Hard Rules
 
-- Use only bounded read-only SQL for discovery and validation unless the user explicitly approves the exact Metric View DDL to run: `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, and `information_schema`.
+- Use only bounded read-only SQL for discovery and validation unless the user explicitly approves the exact Metric View DDL to run: `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, and `information_schema`. Prefer metadata, constraints, scoped predicates, samples, and approximate aggregates before broad scans.
 - Never mutate source tables, source views, schemas, or source data. Do not run `DROP`, `TRUNCATE`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `COPY INTO`, table rewrites, grants, or source object changes.
 - Do not run live `CREATE VIEW`, `CREATE OR REPLACE VIEW`, `ALTER VIEW`, materialization changes, ownership changes, or permission changes until the user approves the exact target object and generated DDL.
 - Do not invent KPI formulas, denominators, scope filters, joins, grains, fiscal calendars, timezone handling, display formats, synonyms, or security semantics. Ask the user when workspace evidence is insufficient.
-- Do not assert `rely.at_most_one_match: true` unless uniqueness is proven by constraints/profiling or explicitly confirmed by a data owner. A wrong `rely` declaration can make measures incorrect.
-- Do not use materialization by default. Recommend it only when query patterns, performance goals, or workload evidence justify precomputed aggregations.
+- Do not use feature-gated Metric View syntax unless the active Databricks Metric View environment supports it. If support cannot be confirmed, omit the gated feature and document it as an optional enhancement.
+- Do not assert `rely.at_most_one_match: true` unless uniqueness is proven by constraints/profiling or explicitly confirmed by a data owner and the active environment supports the optimization. A wrong `rely` declaration can make measures incorrect.
+- Do not use materialization by default. Recommend it only when query patterns, performance goals, workload evidence, and workspace capability justify precomputed aggregations.
 - Do not use `SELECT *` against Metric Views. Explicitly list fields and wrap measures with `MEASURE()`.
 - Prefer existing governed Metric View semantics over duplicating formulas in downstream Genie Space snippets, examples, or text instructions.
 
@@ -31,8 +32,9 @@ Create a governed Unity Catalog Metric View from Databricks-native context. Rely
    - filters: model-level scope only when the scope is a governed business rule
    - joins: fact-to-dimension joins only with evidence; one-to-many only when a multi-grain model is intended and runtime/version support is available
    - agent metadata: display names, comments, synonyms, and formats only when grounded in business language
-   - materialization: only with workload justification
-6. Draft `version: 1.1` YAML by default so agent metadata is available. Present either YAML alone or SQL DDL such as `CREATE OR REPLACE VIEW <target> WITH METRICS LANGUAGE YAML AS $$ ... $$`; use `ALTER VIEW <target> AS $$ ... $$` only for an approved existing Metric View update.
+   - feature availability: use gated features only after compatibility is confirmed from the active Databricks environment, docs, or compiler feedback
+   - materialization: only with workload justification and supported workspace capabilities
+6. Draft `version: 1.1` YAML when agent metadata support is available; otherwise use the supported YAML shape and keep agent metadata recommendations in review notes. Present either YAML alone or approved SQL DDL such as `CREATE VIEW <target> WITH METRICS LANGUAGE YAML AS $$ ... $$`; use `ALTER VIEW <target> AS $$ ... $$` for an approved existing Metric View update and `CREATE OR REPLACE VIEW` only after explicit replacement approval.
 7. Validate before proposing a live run:
    - review YAML/DDL syntax and required fields
    - run or prepare bounded `EXPLAIN` checks for generated Metric View queries
@@ -50,7 +52,7 @@ Provide:
 - The expert inputs gathered and missing definitions.
 - Per-KPI or per-question feasibility confidence with data gaps.
 - Proposed YAML or SQL DDL.
-- Join, `rely`, filter, materialization, agent metadata, and version assumptions.
+- Join, `rely`, filter, materialization, agent metadata, feature availability, and version assumptions.
 - Read-only validation performed, including representative `MEASURE()` queries.
 - Any unresolved questions that block live creation or update.
 - Downstream Genie Space recommendations.

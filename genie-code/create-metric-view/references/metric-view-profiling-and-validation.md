@@ -1,6 +1,6 @@
 # Metric View Profiling And Validation
 
-Use this reference for bounded read-only inspection before drafting or validating a Metric View. Prefer Databricks-native metadata first, then run focused SQL only where it improves semantic confidence.
+Use this reference for bounded read-only inspection before drafting or validating a Metric View. Prefer Databricks-native metadata first, then run focused SQL only where it improves semantic confidence. Treat "read-only" as separate from "cheap": avoid broad scans unless the user approves the cost and purpose.
 
 ## Contents
 
@@ -69,34 +69,63 @@ DESCRIBE TABLE EXTENDED <catalog.schema.metric_view_name> AS JSON;
 
 ## Source Profiling Templates
 
-Row count, key cardinality, and date range:
+Bound profiling with one or more of these controls:
+
+- Start with metadata such as `DESCRIBE TABLE`, `DESCRIBE TABLE EXTENDED`, constraints, comments, and available statistics.
+- Use partition, date, tenant, business-unit, or other scoped predicates before aggregate scans.
+- Use samples for exploratory value discovery and clearly label them as samples.
+- Use approximate aggregates such as `approx_count_distinct` when exact values are not required.
+- Ask before running full-table exact counts, full-table distinct counts, or joins across large objects.
+
+Metadata and table detail:
 
 ```sql
-SELECT
-  COUNT(*) AS row_count,
-  COUNT(DISTINCT <candidate_key>) AS distinct_key_count,
-  MIN(<date_col>) AS min_date,
-  MAX(<date_col>) AS max_date
-FROM <catalog>.<schema>.<table>;
+DESCRIBE TABLE EXTENDED <catalog>.<schema>.<table>;
 ```
 
-Null, empty, and distinct checks for KPI and field columns:
+Scoped row count, key cardinality, and date range:
 
 ```sql
+WITH scoped AS (
+  SELECT <candidate_key>, <date_col>
+  FROM <catalog>.<schema>.<table>
+  WHERE <scope_predicate>
+)
+SELECT
+  COUNT(*) AS scoped_row_count,
+  approx_count_distinct(<candidate_key>) AS approx_distinct_key_count,
+  MIN(<date_col>) AS min_date,
+  MAX(<date_col>) AS max_date
+FROM scoped;
+```
+
+Scoped null, empty, and distinct checks for KPI and field columns:
+
+```sql
+WITH scoped AS (
+  SELECT <col_a>, <col_b>
+  FROM <catalog>.<schema>.<table>
+  WHERE <scope_predicate>
+)
 SELECT
   SUM(CASE WHEN <col_a> IS NULL THEN 1 ELSE 0 END) AS col_a_nulls,
-  COUNT(DISTINCT <col_a>) AS col_a_distinct,
+  approx_count_distinct(<col_a>) AS approx_col_a_distinct,
   SUM(CASE WHEN TRIM(CAST(<col_a> AS STRING)) = '' AND <col_a> IS NOT NULL THEN 1 ELSE 0 END) AS col_a_empty,
   SUM(CASE WHEN <col_b> IS NULL THEN 1 ELSE 0 END) AS col_b_nulls,
-  COUNT(DISTINCT <col_b>) AS col_b_distinct
-FROM <catalog>.<schema>.<table>;
+  approx_count_distinct(<col_b>) AS approx_col_b_distinct
+FROM scoped;
 ```
 
 Categorical values for candidate filters and display fields:
 
 ```sql
+WITH scoped AS (
+  SELECT <category_col>
+  FROM <catalog>.<schema>.<table>
+  WHERE <scope_predicate>
+)
 SELECT <category_col>, COUNT(*) AS row_count
-FROM <catalog>.<schema>.<table>
+FROM scoped
 WHERE <category_col> IS NOT NULL
 GROUP BY <category_col>
 ORDER BY row_count DESC
@@ -106,11 +135,16 @@ LIMIT 50;
 String normalization and boolean-as-string checks:
 
 ```sql
+WITH scoped AS (
+  SELECT <string_col>
+  FROM <catalog>.<schema>.<table>
+  WHERE <scope_predicate>
+)
 SELECT
   LOWER(CAST(<string_col> AS STRING)) AS normalized_value,
   COLLECT_SET(CAST(<string_col> AS STRING)) AS variants,
   COUNT(*) AS row_count
-FROM <catalog>.<schema>.<table>
+FROM scoped
 WHERE <string_col> IS NOT NULL
 GROUP BY LOWER(CAST(<string_col> AS STRING))
 HAVING COUNT(DISTINCT CAST(<string_col> AS STRING)) > 1
@@ -122,40 +156,37 @@ LIMIT 50;
 Measure-input sanity checks:
 
 ```sql
+WITH scoped AS (
+  SELECT <measure_col>
+  FROM <catalog>.<schema>.<table>
+  WHERE <scope_predicate>
+)
 SELECT
-  COUNT(*) AS row_count,
+  COUNT(*) AS scoped_row_count,
   SUM(CASE WHEN <measure_col> IS NULL THEN 1 ELSE 0 END) AS measure_col_nulls,
   MIN(<measure_col>) AS min_measure_col,
   MAX(<measure_col>) AS max_measure_col,
   SUM(<measure_col>) AS sum_measure_col,
   AVG(<measure_col>) AS avg_measure_col
-FROM <catalog>.<schema>.<table>;
+FROM scoped;
 ```
 
 Candidate model-level filter impact:
 
 ```sql
+WITH scoped AS (
+  SELECT <filter_columns>
+  FROM <catalog>.<schema>.<table>
+  WHERE <scope_predicate>
+)
 SELECT
-  COUNT(*) AS all_rows,
+  COUNT(*) AS scoped_rows,
   SUM(CASE WHEN <candidate_filter> THEN 1 ELSE 0 END) AS in_scope_rows,
   SUM(CASE WHEN NOT (<candidate_filter>) OR <candidate_filter> IS NULL THEN 1 ELSE 0 END) AS out_of_scope_rows
-FROM <catalog>.<schema>.<table>;
+FROM scoped;
 ```
 
 ## Join Validation Templates
-
-Many-to-one join overlap and fanout check:
-
-```sql
-SELECT
-  COUNT(*) AS source_rows,
-  COUNT(DISTINCT s.<source_key>) AS source_key_count,
-  COUNT(DISTINCT d.<dimension_key>) AS matched_dimension_key_count,
-  SUM(CASE WHEN d.<dimension_key> IS NULL THEN 1 ELSE 0 END) AS unmatched_source_rows
-FROM <catalog>.<schema>.<source_table> s
-LEFT JOIN <catalog>.<schema>.<dimension_table> d
-  ON s.<source_key> = d.<dimension_key>;
-```
 
 Check whether the joined side is unique before using `rely.at_most_one_match: true`:
 
@@ -164,22 +195,88 @@ SELECT
   <dimension_key>,
   COUNT(*) AS row_count
 FROM <catalog>.<schema>.<dimension_table>
+WHERE <dimension_scope_predicate>
 GROUP BY <dimension_key>
 HAVING COUNT(*) > 1
 ORDER BY row_count DESC
 LIMIT 50;
 ```
 
+Many-to-one base versus joined row behavior:
+
+```sql
+WITH source_scope AS (
+  SELECT <source_row_id>, <source_key>
+  FROM <catalog>.<schema>.<source_table>
+  WHERE <source_scope_predicate>
+),
+dimension_scope AS (
+  SELECT <dimension_key>
+  FROM <catalog>.<schema>.<dimension_table>
+  WHERE <dimension_scope_predicate>
+),
+joined AS (
+  SELECT
+    s.<source_row_id>,
+    s.<source_key>,
+    d.<dimension_key> AS matched_dimension_key
+  FROM source_scope s
+  LEFT JOIN dimension_scope d
+    ON s.<source_key> = d.<dimension_key>
+)
+SELECT
+  (SELECT COUNT(*) FROM source_scope) AS base_rows,
+  (SELECT COUNT(*) FROM joined) AS joined_rows,
+  (SELECT COUNT(*) FROM joined WHERE matched_dimension_key IS NULL) AS unmatched_rows,
+  (SELECT COUNT(*) FROM joined) - (SELECT COUNT(*) FROM source_scope) AS fanout_rows;
+```
+
+Source rows with multiple joined matches:
+
+```sql
+WITH source_scope AS (
+  SELECT <source_row_id>, <source_key>
+  FROM <catalog>.<schema>.<source_table>
+  WHERE <source_scope_predicate>
+),
+dimension_scope AS (
+  SELECT <dimension_key>
+  FROM <catalog>.<schema>.<dimension_table>
+  WHERE <dimension_scope_predicate>
+)
+SELECT
+  s.<source_row_id>,
+  s.<source_key>,
+  COUNT(d.<dimension_key>) AS match_count
+FROM source_scope s
+LEFT JOIN dimension_scope d
+  ON s.<source_key> = d.<dimension_key>
+GROUP BY s.<source_row_id>, s.<source_key>
+HAVING COUNT(d.<dimension_key>) > 1
+ORDER BY match_count DESC
+LIMIT 50;
+```
+
 One-to-many branch profile:
 
 ```sql
+WITH source_scope AS (
+  SELECT <source_key>
+  FROM <catalog>.<schema>.<source_table>
+  WHERE <source_scope_predicate>
+),
+fact_scope AS (
+  SELECT <fact_key>, <fact_source_key>
+  FROM <catalog>.<schema>.<fact_table>
+  WHERE <fact_scope_predicate>
+)
 SELECT
-  COUNT(*) AS source_rows,
-  COUNT(DISTINCT s.<source_key>) AS source_keys,
+  (SELECT COUNT(*) FROM source_scope) AS source_rows,
+  approx_count_distinct(s.<source_key>) AS approx_source_keys,
   COUNT(f.<fact_key>) AS joined_fact_rows,
-  COUNT(DISTINCT f.<fact_key>) AS joined_fact_keys
-FROM <catalog>.<schema>.<source_table> s
-LEFT JOIN <catalog>.<schema>.<fact_table> f
+  approx_count_distinct(f.<fact_key>) AS approx_joined_fact_keys
+FROM source_scope s
+LEFT JOIN fact_scope f
   ON f.<fact_source_key> = s.<source_key>;
 ```
 
@@ -211,10 +308,10 @@ LIMIT 50;
 
 ## Draft DDL Shapes
 
-Create or replace a Metric View only after user approval:
+Create a new Metric View only after user approval:
 
 ```sql
-CREATE OR REPLACE VIEW <catalog.schema.metric_view_name> WITH METRICS LANGUAGE YAML AS
+CREATE VIEW <catalog.schema.metric_view_name> WITH METRICS LANGUAGE YAML AS
 $$
 version: 1.1
 comment: "<business purpose and scope>"
@@ -229,6 +326,25 @@ measures:
   - name: <Business Measure>
     expr: <aggregate_expression>
     comment: "<business definition>"
+$$;
+```
+
+Replace a Metric View only after explicit replacement approval:
+
+```sql
+CREATE OR REPLACE VIEW <catalog.schema.metric_view_name> WITH METRICS LANGUAGE YAML AS
+$$
+version: 1.1
+comment: "<business purpose and scope>"
+source: <catalog.schema.source_object>
+
+fields:
+  - name: <Business Field>
+    expr: <source_expression>
+
+measures:
+  - name: <Business Measure>
+    expr: <aggregate_expression>
 $$;
 ```
 
