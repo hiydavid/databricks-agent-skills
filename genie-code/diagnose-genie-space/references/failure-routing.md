@@ -39,7 +39,7 @@ Translate feedback patterns into the existing repair levers:
 - User comments that explain a business term, synonym, category label, KPI definition, fiscal period, or expected result shape: treat the comment as business-intent evidence and encode the durable rule in metadata, Metric View semantics, prompt matching, snippets, representative examples, or short global instructions.
 - High negative-feedback volume with weak or missing benchmark coverage: recommend benchmark repair or benchmark additions before benchmark-driven tuning, and use feedback clusters to choose representative benchmark candidates.
 - Feedback that contradicts passing benchmark results: check whether benchmarks are stale, too narrow, too easy, missing Agent evaluation notes, or failing to cover real user phrasing before trusting the benchmark signal.
-- Private conversations or unavailable Monitor details: use visible prompt, status, rating, timestamp, and trend metadata only; lower confidence and state the limitation.
+- Private conversations or unavailable Monitor details: use visible prompt, status, rating, timestamp, and trend metadata only; do not use Genie conversation APIs or audit logs to recover hidden content; lower confidence and state the limitation.
 
 ## Failure Classes
 
@@ -71,7 +71,7 @@ Fix: add or clarify raw-table join specs backed by constraints, naming, row-coun
 
 Symptoms: wrong numerator, denominator, aggregation, fiscal period, date boundary, rolling window, ranking, or answer shape; feedback supplies the expected KPI definition, time convention, ranking rule, or result shape.
 
-Fix: use snippets for reusable expressions or filters, Metric View measures for governed metrics, and representative example SQL for complex multi-step shapes.
+Fix: use snippets for reusable expressions or filters, Metric View measures for governed metrics, and representative example SQL for complex multi-step shapes. Representative examples should teach reusable patterns, not copy benchmark questions, answer SQL, evaluation-note wording, or failing prompts.
 
 ### Weak Agent-Mode Report
 
@@ -105,7 +105,7 @@ Treat these as blockers or warnings during diagnosis:
 - Generic table, Metric View, or column descriptions.
 - Important categorical filters without prompt matching.
 - Raw tables exposed together with missing joins.
-- Example SQL that copies benchmark questions.
+- Example SQL that copies benchmark questions, answer SQL, evaluation-note wording, or failing prompts.
 - High negative-feedback or review-request volume for patterns with weak benchmark coverage.
 - Feedback comments that repeatedly define business terms missing from metadata, Metric Views, prompt matching, snippets, examples, or short global instructions.
 - Passing benchmark results that contradict recent negative feedback on equivalent real user questions.

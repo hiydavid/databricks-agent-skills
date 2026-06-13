@@ -1,6 +1,6 @@
 ---
 name: diagnose-genie-space
-description: "Diagnose Databricks Genie Space quality issues without making changes in Databricks Genie Code Agent mode. Use inside Databricks when users ask for plan-only root-cause analysis, health checks, or explanations for wrong SQL, wrong answers, inconsistent answers, weak Agent-mode reports, source-selection errors, metric, dimension, filter, join, time logic, benchmark size, benchmark coverage, benchmark pruning, monitoring feedback, thumbs up/down trends, review requests, user comments, usage trends, conversation-quality signals, or instruction problems before tuning."
+description: "Diagnose Databricks Genie Space quality issues without making changes in Databricks Genie Code Agent mode. Use inside Databricks when users ask for plan-only root-cause analysis, health checks, or explanations for wrong SQL, wrong answers, inconsistent answers, weak Agent-mode reports, source-selection errors, metric, dimension, filter, join, time logic, benchmark size, benchmark coverage, benchmark pruning, monitoring feedback, thumbs up/down trends, Genie Monitor review requests, Genie feedback comments or reviewer comments, usage trends, conversation-quality signals, or instruction problems before tuning."
 ---
 
 # Diagnose Genie Space For Genie Code
@@ -12,6 +12,8 @@ Diagnose Genie Space quality without making changes. Use Genie Code Agent mode t
 - This skill is plan-only. Do not edit the Genie Space, change benchmarks, run benchmark evaluation, or mutate source data.
 - Do not send feedback, create comments, delete conversations, edit generated SQL, save instructions, add benchmarks, or change conversation review status during diagnosis.
 - Use only bounded read-only SQL: `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, and `information_schema`.
+- Do not use UI, API, or audit-log access to bypass private-conversation visibility. Treat unavailable conversation content as a limitation.
+- Do not copy benchmark questions, answer SQL, evaluation-note wording, or failing prompts into examples, snippets, or instructions.
 - Ask for missing business intent or expected behavior when workspace evidence is insufficient.
 - Prefer concrete evidence over generic best-practice advice.
 
@@ -35,10 +37,10 @@ Diagnose Genie Space quality without making changes. Use Genie Code Agent mode t
    - filtered conversations with negative ratings, `Fix it`, `Request review`, needs-review status, repeated questions, or common user phrasing
    - reviewable conversation details: user prompt, Genie response, generated SQL or error, feedback comment, reviewer comments, citations, and whether the issue repeats across conversations
    - privacy limitations: when conversations are private, use only visible prompt, status, rating, timestamp, and trend metadata; state what could not be inspected
-   - fallback evidence, when UI access supports it: Genie `Analyze space usage`, Genie conversation APIs, or read-only `system.access.audit` queries for `updateConversationMessageFeedback` and `createConversationMessageComment`
+   - fallback evidence, when UI access supports it: Genie `Analyze space usage`, read-only Genie conversation APIs, or read-only `system.access.audit` queries for `updateConversationMessageFeedback` and `createConversationMessageComment`; aggregate where practical and never use fallback logs to recover private or unavailable conversation content
 4. Use bounded read-only SQL only when the Space context or feedback evidence does not explain the issue. For Metric View failures, inspect the Metric View definition before dropping down to raw sources.
 5. Classify the primary failure and secondary contributors using `references/failure-routing.md`. Treat feedback as evidence that helps cluster failures, not as a separate tuning surface.
-6. Recommend the smallest structured tuning change. Prefer metadata, Metric View semantics, prompt matching, joins, snippets, and representative examples before text instructions.
+6. Recommend the smallest structured tuning change. Prefer metadata, Metric View semantics, prompt matching, joins, snippets, and representative examples before text instructions. Representative examples should teach reusable patterns, not memorize benchmarks or failing questions.
 7. Produce a concise diagnostic write-up in chat or notebook output.
 
 ## Diagnostic Write-Up
@@ -78,4 +80,4 @@ Use this shape:
 - Highest-risk static issues:
 ```
 
-End with the next action: either user confirmation needed, a handoff to `optimize-genie-space`, or a user-approved manual edit outside this diagnostic pass.
+End with the next action: either user confirmation needed for missing evidence, a handoff to `optimize-genie-space` for edits, evaluations, or benchmark repair, or a recommendation-only summary when no change is justified.
