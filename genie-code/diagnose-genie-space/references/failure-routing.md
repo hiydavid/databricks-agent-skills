@@ -4,18 +4,32 @@ Use this reference to classify Genie Space failures and choose the smallest usef
 
 ## Evidence To Gather
 
+- Access and validation limits: Space configuration visibility, Monitor visibility, generated SQL availability, Query History visibility, and whether bounded read-only SQL can run.
 - Relevant table, view, and Metric View identifiers and descriptions.
 - Metric View measures, dimensions, filters, joins, time dimensions, comments, display names, synonyms, and formatting.
 - Table and column descriptions, synonyms, prompt matching settings, and hidden fields.
 - Join specs and comments for raw tables exposed together.
-- SQL snippets, example SQL, SQL functions, and text instructions.
+- SQL snippets/expressions, example SQL, SQL functions, and text instructions, including conflicts, redundancy, stale assumptions, and Metric View duplication.
 - Similar benchmark questions, SQL answers, evaluation notes, and execution mode, if present.
 - Benchmark inventory size, duplicate clusters, coverage categories, difficulty levels, and whether the set is too small, too narrow, too easy, or too large for practical iteration.
 - Monitor-tab feedback signals: thumbs up/down trends, negative ratings, `Fix it`, `Request review`, needs-review conversations, feedback comments, reviewer comments, repeated user phrasing, generated SQL or error text from reviewable conversations, and private-conversation limitations.
 - Agent-mode final reports, research steps, supporting query outputs, citations, tables, charts, and assessment notes when applicable.
 - Latency evidence for slow-response cases: Chat mode versus Agent mode, benchmark versus ad hoc use, total response time, time before SQL appears, Agent reasoning time, final response synthesis time, Query History execution duration, queue time, warehouse startup time, result-fetch time, and whether the same simple question is repeatedly slow.
 - Context-overload evidence for slow-generation cases: data source count, overlapping raw tables and Metric Views, noisy exposed columns, broad prompt matching, long text instructions, redundant or long example SQL, excessive trusted assets or SQL functions, token-limit warnings, long chat history, and long generated SQL or text responses.
-- Read-only checks for data types, categorical values, null rates, cardinality, join grain, and Metric View query behavior when needed.
+- Static config evidence from `config-review.md`, especially when query access is unavailable.
+- Read-only checks for data types, categorical values, null rates, cardinality, join grain, and Metric View query behavior when needed and available.
+
+## Config-First Routing
+
+When SQL execution or Query History is unavailable, route from static configuration evidence first and label validation limits clearly.
+
+- Missing, generic, overlapping, or contradictory data source descriptions: route to `Wrong Data Source Or Field`.
+- Missing business terms, unclear column semantics, duplicated aliases, or exposed noisy fields: route to `Wrong Data Source Or Field`, `Wrong Filter Value`, or `Generation Latency Or Context Overload`.
+- Metric formulas split across Metric Views, snippets, examples, and text instructions: route to `Wrong Metric View Measure, Dimension, Scope, Or Grain`, `Business Logic Or Time Logic Error`, or `Config Conflict Or Redundancy`.
+- Reusable filters, date windows, ranking logic, or grain rules encoded in long text instructions: route to `Business Logic Or Time Logic Error` or `Config Conflict Or Redundancy`.
+- Conflicting, duplicate, stale, or overly specific SQL snippets/expressions and examples: route to `Business Logic Or Time Logic Error`, `Wrong Join`, or `Config Conflict Or Redundancy`.
+- Excessive source count, raw/Metric View overlap, broad prompt matching, long instructions, or redundant examples: route to `Generation Latency Or Context Overload`.
+- If a likely fix depends on data values, join cardinality, freshness, row counts, or runtime timing, keep the diagnosis but set confidence to Medium or Low and name the smallest validation needed.
 
 ## Latency Pre-Routing
 
@@ -100,6 +114,12 @@ Fix: reduce `data_sources.tables` plus `data_sources.metric_views` to a focused 
 
 Avoid: optimizing warehouse size, table layout, or generated SQL when Query History shows runtime is not the bottleneck; adding broad text instructions such as "be faster"; adding more examples before pruning redundant context; treating Agent-mode latency on simple questions as a SQL performance problem without validating Chat mode or trusted assets.
 
+### Config Conflict Or Redundancy
+
+Symptoms: data source descriptions, column descriptions, Metric View metadata, snippets, examples, prompt matching, benchmarks, feedback-derived assumptions, or text instructions conflict; snippets or examples duplicate the same business logic with different literals, date boundaries, aliases, or aggregation grain; text instructions contain a long source-specific rulebook; examples or snippets repeat Metric View formulas; static config review finds stale table names, deprecated fields, or overlapping source guidance.
+
+Fix: consolidate the rule into the most specific structured surface, remove redundant examples or snippets, clarify source and column descriptions, route governed formulas to Metric View metadata or upstream semantic-model recommendations, keep examples representative and non-duplicative, and keep text instructions short, global, and non-overlapping. When query access is unavailable, report the static conflict and name the smallest validation needed before applying a tuning edit.
+
 ### Benchmark Ground Truth Problem
 
 Symptoms: invalid SQL answer, missing SQL for a deterministic Chat benchmark, unclear or missing evaluation note for an Agent-style benchmark, a multi-query analysis question forced into a single SQL answer, or benchmark pass rates that conflict with recent negative user feedback on the same pattern.
@@ -112,12 +132,6 @@ Symptoms: too many questions for practical benchmark iteration, many near-duplic
 
 Fix: recommend a dedicated benchmark pruning pass outside Genie tuning. Retain a representative set that preserves diversity, source and metric coverage, answer shapes, historically fragile behavior, and a meaningful mix of medium and hard questions, with only a small number of easy smoke tests. Record pruned question IDs and the coverage or difficulty rationale.
 
-### Instruction Conflict Or Overload
-
-Symptoms: examples, snippets, benchmarks, feedback-derived assumptions, or text instructions conflict; text instructions contain a long source-specific rulebook.
-
-Fix: move specific logic into structured surfaces and keep text instructions short, global, and non-overlapping.
-
 ## Health Signals
 
 Treat these as blockers or warnings during diagnosis:
@@ -126,6 +140,8 @@ Treat these as blockers or warnings during diagnosis:
 - Generic table, Metric View, or column descriptions.
 - Important categorical filters without prompt matching.
 - Raw tables exposed together with missing joins.
+- Conflicting or redundant SQL snippets/expressions, example SQL, source metadata, Metric View metadata, prompt matching, or text instructions.
+- Snippets or examples that duplicate governed Metric View formulas without teaching a query shape.
 - Example SQL that copies benchmark questions, answer SQL, evaluation-note wording, or failing prompts.
 - High negative-feedback or review-request volume for patterns with weak benchmark coverage.
 - Feedback comments that repeatedly define business terms missing from metadata, Metric Views, prompt matching, snippets, examples, or short global instructions.
