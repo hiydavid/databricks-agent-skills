@@ -13,7 +13,18 @@ Use this reference to classify Genie Space failures and choose the smallest usef
 - Benchmark inventory size, duplicate clusters, coverage categories, difficulty levels, and whether the set is too small, too narrow, too easy, or too large for practical iteration.
 - Monitor-tab feedback signals: thumbs up/down trends, negative ratings, `Fix it`, `Request review`, needs-review conversations, feedback comments, reviewer comments, repeated user phrasing, generated SQL or error text from reviewable conversations, and private-conversation limitations.
 - Agent-mode final reports, research steps, supporting query outputs, citations, tables, charts, and assessment notes when applicable.
+- Latency evidence for slow-response cases: Chat mode versus Agent mode, benchmark versus ad hoc use, total response time, time before SQL appears, Agent reasoning time, final response synthesis time, Query History execution duration, queue time, warehouse startup time, result-fetch time, and whether the same simple question is repeatedly slow.
+- Context-overload evidence for slow-generation cases: data source count, overlapping raw tables and Metric Views, noisy exposed columns, broad prompt matching, long text instructions, redundant or long example SQL, excessive trusted assets or SQL functions, token-limit warnings, long chat history, and long generated SQL or text responses.
 - Read-only checks for data types, categorical values, null rates, cardinality, join grain, and Metric View query behavior when needed.
+
+## Latency Pre-Routing
+
+For slow-response complaints, first separate SQL-runtime latency from query-generation or thinking-phase latency.
+
+- If Query History shows SQL execution, queue time, warehouse startup, scan, spill, or result-fetch time dominates total latency, stop Space-quality diagnosis and hand off to `optimize-genie-query`.
+- If SQL execution is fast but the user waits before SQL appears, during Agent reasoning, or during long final response synthesis, classify the case as `Generation Latency Or Context Overload` and recommend Space configuration cleanup through `optimize-genie-space`.
+- For Agent mode, state that Agent mode can naturally take longer because it creates a plan, runs multiple queries, learns from results, and synthesizes a report. For simple deterministic questions, validate Chat mode, a trusted asset, or a concise parameterized example as the lower-latency path.
+- If the latency split is unavailable, ask for or inspect Query History timing before recommending warehouse, table-layout, or Space configuration changes.
 
 ## Routing Order
 
@@ -79,6 +90,16 @@ Symptoms: incomplete research plan, too few supporting queries, weak evidence, u
 
 Fix: improve source and Metric View descriptions, clarify metric and dimension semantics, add representative examples for reusable investigative patterns, or add a short global response-quality instruction only when the problem is not source-specific.
 
+### Generation Latency Or Context Overload
+
+Symptoms: users complain Chat-mode or Agent-mode responses are too slow for simple questions; SQL execution is fast but Genie spends a long time thinking before SQL appears; Agent mode reasons for too long on deterministic lookup or aggregation questions; generated SQL or answer text is exceptionally long; long conversations get slower or time out during the thinking phase.
+
+Likely causes: too many or overlapping data sources, raw tables exposed alongside Metric Views for the same business concepts, noisy columns left visible, long source-specific text instructions, redundant or oversized example SQLs, broad prompt matching or entity matching on columns that do not help common questions, too many trusted assets or SQL functions in context, token-limit pressure, long chat history, or complex examples that teach verbose SQL for simple questions.
+
+Fix: reduce `data_sources.tables` plus `data_sources.metric_views` to a focused set, targeting five or fewer sources initially and staying under the Databricks 30 table/view limit; split broad spaces by domain when needed; prefer Metric Views, prejoined views, or materialized views for repeated business questions; hide noisy columns with `exclude`; move metric, filter, and join logic out of text instructions into Metric View semantics, SQL snippets, join specs, or representative examples; keep text instructions short, global, and non-overlapping; prune redundant or excessively long example SQL; use trusted assets or views to encapsulate common complex queries; recommend starting a new chat when long conversation history is likely influencing generation.
+
+Avoid: optimizing warehouse size, table layout, or generated SQL when Query History shows runtime is not the bottleneck; adding broad text instructions such as "be faster"; adding more examples before pruning redundant context; treating Agent-mode latency on simple questions as a SQL performance problem without validating Chat mode or trusted assets.
+
 ### Benchmark Ground Truth Problem
 
 Symptoms: invalid SQL answer, missing SQL for a deterministic Chat benchmark, unclear or missing evaluation note for an Agent-style benchmark, a multi-query analysis question forced into a single SQL answer, or benchmark pass rates that conflict with recent negative user feedback on the same pattern.
@@ -111,3 +132,6 @@ Treat these as blockers or warnings during diagnosis:
 - Passing benchmark results that contradict recent negative feedback on equivalent real user questions.
 - Benchmark set too small, too narrow, too easy, too redundant, too large for practical iteration, missing checked SQL answers for deterministic Chat execution, or missing evaluation notes for Agent-style questions.
 - Text instructions containing source-specific SQL logic.
+- Query History shows fast SQL runtime but users wait a long time before SQL appears or during Agent reasoning.
+- Data source count is high, or raw tables/views overlap with Metric Views for the same simple questions.
+- Long text instructions, redundant examples, broad prompt matching, excessive trusted assets, token-limit warnings, or long chat history create context pressure.
