@@ -1,0 +1,23 @@
+# Databricks Apps manifest for the spike MCP server.
+# App name must start with "mcp-" for AI Playground / Genie Code recognition (spec §10).
+#
+# Bind to DATABRICKS_APP_PORT (Apps injects it; default 8000). uvicorn resolves the
+# import string against the app source root (which is on sys.path), so `server.app`,
+# `config`, and `spike_core` all import cleanly.
+command:
+  - "sh"
+  - "-c"
+  - "uvicorn server.app:combined_app --host 0.0.0.0 --port ${DATABRICKS_APP_PORT:-8000}"
+
+env:
+  - name: HISTORY_CATALOG
+    value: "dhuang_catalog"          # pre-existing; the app NEVER creates it
+  - name: HISTORY_SCHEMA
+    value: "genie_space_history"     # fixed schema name (spec §7.1)
+  - name: SQL_WAREHOUSE_ID
+    value: "78e36e2b033b2d06"        # spike: hardcoded. Prod: use `valueFrom: sql-warehouse`
+                                     # (an app SQL-warehouse resource binding) instead.
+  - name: GENIE_SPACE_ID
+    value: "01f16b396b3419ba8462d5efe167d947"   # throwaway space for the round-trip probe
+  - name: CORS_ALLOW_ORIGINS
+    value: "https://fevm-dhuang.cloud.databricks.com"
