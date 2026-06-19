@@ -70,7 +70,7 @@ def main(argv: list):
     if "variant" in results:
         print(f"  -> VARIANT decision : {results['variant'].get('recommendation', '?')}")
     if "etag" in results:
-        print(f"  -> etag enforced    : {results['etag'].get('stale_update_rejected', '?')}")
+        print(f"  -> etag enforced    : {results['etag'].get('nonmatching_etag_rejected', '?')}")
     if "whoami" in results:
         print(f"  -> identity         : {results['whoami'].get('user_name', '?')}")
     print("=" * 78)

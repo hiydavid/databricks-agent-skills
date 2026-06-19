@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastmcp import FastMCP
 
 from .tools import load_tools
-from .utils import header_store
+from .utils import OBO_HEADER, obo_token_var
 
 mcp_server = FastMCP(name="mcp-genie-space-history")
 
@@ -25,8 +25,8 @@ load_tools(mcp_server)
 
 # stateless_http=True: each request is self-contained (no mcp-session-id handshake),
 # which is what the Databricks Assistant / Genie Code expects and what horizontally
-# scaled Databricks Apps need.
-mcp_app = mcp_server.http_app(stateless_http=True)
+# scaled Databricks Apps need. path="/mcp" is the Genie Code requirement (spec §3).
+mcp_app = mcp_server.http_app(path="/mcp", stateless_http=True)
 
 api = FastAPI(title="mcp-genie-space-history (spike)", version="0.0.1", lifespan=mcp_app.lifespan)
 
@@ -61,7 +61,10 @@ combined_app.add_middleware(
 
 
 @combined_app.middleware("http")
-async def capture_headers(request: Request, call_next):
-    """Stash request headers so OBO tools can read X-Forwarded-Access-Token."""
-    header_store.set(dict(request.headers))
-    return await call_next(request)
+async def capture_obo_token(request: Request, call_next):
+    """Stash only the OBO token for this request; reset it afterward so it never leaks."""
+    reset = obo_token_var.set(request.headers.get(OBO_HEADER))
+    try:
+        return await call_next(request)
+    finally:
+        obo_token_var.reset(reset)

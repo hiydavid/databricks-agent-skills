@@ -15,10 +15,10 @@ Identity: `david.huang@databricks.com` · Probe SDK: **databricks-sdk 0.118.0** 
 |---|---|---|---|---|
 | 1 | Hosting: MCP on Apps, `/mcp` stateless, connectable from Genie Code | 🟢 **deployed & serving** | `/` & `/healthz` = 200; `/mcp` SSE `initialize` OK; all 6 tools listed. Genie-Code "add server" is the only manual bit. | **App reachable at `/mcp` (stateless streamable HTTP) ✓** |
 | 2 | OBO `current_user.me()` returns calling user | 🟢 **verified end-to-end** | `whoami` over `/mcp` returns the calling user via `X-Forwarded-Access-Token` | **OBO ENABLED ✓**; default OBO scopes lack `genie`/`sql` — add `user_api_scopes` (F-6) |
-| 3 | App SP auto-creates schema + table `IF NOT EXISTS`; catalog NOT created | 🟢 yes | `idempotent=true`, `catalog_created_by_spike=false`, both DDL runs `SUCCEEDED` | **Provisioning works** (+ DDL needed a fix — see F-4) |
+| 3 | App SP auto-creates schema + table `IF NOT EXISTS`; catalog NOT created | 🟢 DDL/idempotency as user · 🟡 SP blocked on grant | DDL + `IF NOT EXISTS` idempotency + catalog-not-created verified as user `david.huang`; the **app-SP** bootstrap path runs as the SP via the deployed app but is **blocked on the missing catalog grant** (verbatim below) | Provisioning path works; **SP still needs `USE CATALOG`+`CREATE SCHEMA`** grant (+ DDL fix F-4) |
 | 4 | VARIANT probe | 🟢 yes | `variant_usable=true` → **VARIANT** | **VARIANT is USABLE** on warehouse `78e36e2b033b2d06` (not just STRING) |
-| 5 | Genie `get_space`→`update_space` round-trip; min permission | 🟢 yes | Round-trip OK, `config_unchanged=true` | **Min permission verified: CAN MANAGE** (CAN EDIT floor documented, not isolated — see #5) |
-| 6 | Stale-etag update rejected | 🟢 yes | `stale_update_rejected=true` (`Aborted`) | **etag optimistic lock ENFORCED** (requires SDK ≥ 0.118.0 — see F-1) |
+| 5 | Genie `get_space`→`update_space` round-trip; min permission | 🟢 yes | Round-trip OK, `config_unchanged=true` | **Verified at CAN MANAGE; the minimum was NOT isolated** — CAN EDIT is the documented floor, not tested with a CAN-EDIT-only principal |
+| 6 | Stale-etag update rejected | 🟢 yes (non-matching etag) | `nonmatching_etag_rejected=true` (`Aborted`) | **Optimistic lock ENFORCED for a non-matching etag** (a truly-*stale* etag after a real concurrent edit was not tested; needs SDK ≥ 0.118.0 — F-1) |
 
 ---
 
@@ -64,6 +64,11 @@ the scope caveat (the default OBO token lacks `genie`/`sql`).
 
 ### #3 — Auto-provision schema + table (catalog NOT created)
 
+**What was verified, and as whom — two distinct runs:**
+
+**(a) As user `david.huang` (CLI profile)** — proves the DDL mechanics, `IF NOT EXISTS`
+idempotency, and the no-catalog invariant:
+
 ```json
 {
   "catalog": "dhuang_catalog",
@@ -72,22 +77,40 @@ the scope caveat (the default OBO token lacks `genie`/`sql`).
   "catalog_created_by_spike": false,
   "catalog_accessible": true,
   "schema_existed_before": true,
-  "table_existed_before": false,
+  "table_existed_before": true,
   "ddl_run_1_state": "SUCCEEDED",
   "ddl_run_2_state": "SUCCEEDED",
   "idempotent": true,
   "ok": true
 }
 ```
+(The very first run after the F-4 DDL fix showed `table_existed_before=false` — i.e. it
+created the table fresh; subsequent runs find it present and the `CREATE … IF NOT EXISTS`
+still `SUCCEEDED` both times. `catalog_created_by_spike=false` is a hard invariant — the
+code issues no `CREATE CATALOG`.)
 
-- Schema + table created via `... IF NOT EXISTS`; **no `CREATE CATALOG` is ever issued**
-  (`catalog_created_by_spike=false`).
-- Idempotency shown two ways: `schema_existed_before=true` (it survived from the earlier
-  run) and the table DDL ran **twice**, both `SUCCEEDED`.
-- Run as `david.huang` (a CLI-profile identity), this proves the **DDL mechanics +
-  idempotency + the no-catalog invariant**. The app-SP-with-only-`USE CATALOG`+`CREATE
-  SCHEMA` sufficiency is confirmed when the deployed app calls `provision_history_schema`
-  (RUNBOOK §1).
+**(b) As the app service principal** — `provision_history_schema` invoked over the deployed
+`/mcp` (so it really runs as the SP, not me). It is **blocked on the missing catalog grant**:
+
+```json
+{
+  "catalog": "dhuang_catalog",
+  "schema": "dhuang_catalog.genie_space_history",
+  "table": "dhuang_catalog.genie_space_history.config_snapshots",
+  "catalog_created_by_spike": false,
+  "catalog_accessible": false,
+  "catalog_error": "SQL StatementState.FAILED: PERMISSION_DENIED: User does not have BROWSE on Catalog 'dhuang_catalog'.",
+  "ok": false,
+  "note": "Catalog missing or no USE CATALOG grant; spike does NOT create catalogs."
+}
+```
+
+**Honest verdict:** the **DDL + idempotency + catalog-not-created** behavior is verified
+(as the user). The **app-SP bootstrap path is implemented and confirmed to execute as the
+SP** (`get_app_workspace_client()` → `provision_history_schema`), but it **did NOT create
+the objects as the SP** — the SP lacks `USE CATALOG`/`CREATE SCHEMA` on `dhuang_catalog`.
+The SQL *did* run on the warehouse (so the SP has warehouse access; only the catalog grant
+is missing). Grant it (RUNBOOK §1) and re-invoke to fully close #3 as the SP.
 
 ### #4 — VARIANT probe → **USABLE**
 
@@ -137,7 +160,7 @@ can be an opt-in (the spec default remains STRING for portability — §12 #3).
 - `get_space(include_serialized_space=True)` → re-applied the **identical** `serialized_space`
   + outer metadata via `update_space(..., etag=...)`. `config_hash` is byte-identical before
   and after (`config_unchanged=true`) — the Space's effective config was **not changed**.
-- **Minimum permission — verified at `CAN_MANAGE`.** `GET
+- **Permission level the test ran at: `CAN_MANAGE` — this is NOT the minimum.** `GET
   /api/2.0/permissions/genie/01f16b396b3419ba8462d5efe167d947` shows the caller has
   `CAN_MANAGE` (inherited from the parent directory, and via the `admins` group):
   ```json
@@ -146,32 +169,36 @@ can be an opt-in (the spec default remains STRING for portability — §12 #3).
     {"group_name":"admins","all_permissions":[{"permission_level":"CAN_MANAGE","inherited":true}]}],
    "object_type":"genie","object_id":"/genie/3958256460036208"}
   ```
-  The round-trip succeeds at **CAN MANAGE**. The spec's documented floor is **CAN EDIT** for
-  the read; whether CAN-EDIT-only is sufficient for `update_space` was **not independently
-  isolated** here (would need a second principal granted *only* CAN EDIT). Recorded as a
-  follow-up, not claimed.
+  So `get_space`+`update_space` is **verified to work at CAN MANAGE**. The **minimum required
+  permission was NOT independently isolated**: the spec's documented floor is **CAN EDIT**,
+  but that was *not* tested here — doing so would need a second principal granted *only* CAN
+  EDIT (and confirming the round-trip still works). Stated as a follow-up, not claimed.
 
-### #6 — Stale-etag rejection (optimistic lock) → **ENFORCED**
+### #6 — Non-matching-etag rejection (optimistic lock) → **ENFORCED**
 
 ```json
 {
   "etag_initial": "5c2f5548f0dd445210891c7eac0fb74f10c893ef85394e6adbe34680d7f2b0c5",
   "etag_after_valid_update": "5c2f5548f0dd445210891c7eac0fb74f10c893ef85394e6adbe34680d7f2b0c5",
   "etag_rotated": false,
-  "stale_attempts": [
+  "etag_attempts": [
     {"label": "reuse_previous_etag", "etag_used": "5c2f5548...d7f2b0c5", "rejected": false},
-    {"label": "bogus_etag", "etag_used": "stale-etag-probe-0000", "rejected": true,
+    {"label": "nonmatching_etag", "etag_used": "nonmatching-etag-probe-0000", "rejected": true,
      "error_class": "Aborted",
      "error_message": "Space configuration has been modified since this export was taken. Re-export the space and merge your changes, or omit the etag to skip conflict detection."}
   ],
-  "stale_update_rejected": true,
+  "nonmatching_etag_rejected": true,
   "ok": true
 }
 ```
 
-A wrong etag is **rejected** with `Aborted` and an explicit conflict message — the
-optimistic lock works. See **F-5** for why the etag is content-based (and why
-`reuse_previous_etag` was accepted: the content was identical, so that etag was *not* stale).
+**What this proves:** a **non-matching** etag is **rejected** with `Aborted` + an explicit
+conflict message — the optimistic-lock mechanism is present and enforced. **What it does
+not prove:** a *truly stale* etag (one that was valid, then invalidated by a real concurrent
+edit) — that would require mutating the live Space, which this no-op spike deliberately
+avoids. The `reuse_previous_etag` attempt was **accepted** precisely because the etag is
+**content-based** (F-5): re-applying identical content keeps the same etag, so it still
+matched and was not a conflict.
 
 ---
 
@@ -203,7 +230,7 @@ current_user()` require that feature. **Fix:** add
 - Re-applying byte-identical `serialized_space` returns the **same etag** (`etag_rotated=false`).
   So the etag behaves like a content hash: a "previous" etag is only *stale* if the content
   actually changed. To exercise the lock deterministically, use a **non-matching** etag (the
-  bogus-etag attempt) or a snapshot taken before a real edit. The error message confirms the
+  non-matching-etag attempt) or a snapshot taken before a real edit. The error message confirms the
   intent: *"…or omit the etag to skip conflict detection."*
 - Genie Space ACLs are readable/settable at **`/api/2.0/permissions/genie/{space_id}`**
   (`object_type: "genie"`) — useful for the server to pre-flight the caller's permission.
@@ -276,8 +303,8 @@ real (not left as runbook).
 | OBO enabled in workspace? | **YES** — `whoami` over `/mcp` returned the calling user via `X-Forwarded-Access-Token` | #2 (deployed app) |
 | OBO scopes for genie/sql? | **NOT default** — add `user_api_scopes` (`sql`,`genie`,`dashboards`) | F-6 |
 | VARIANT usable, or STRING? | **VARIANT USABLE** on `78e36e2b033b2d06` (spec keeps STRING default; VARIANT opt-in) | #4 |
-| Min Genie permission for `update_space`? | **CAN MANAGE verified**; CAN EDIT is the documented floor, not isolated in this spike | #5 + permissions API |
-| etag enforced? | **YES** — stale/wrong etag → `Aborted` conflict | #6 |
+| Min Genie permission for `update_space`? | **Works at CAN MANAGE** (the tested level); **minimum NOT isolated** — CAN EDIT is the documented floor, untested with a CAN-EDIT-only principal | #5 + permissions API |
+| etag enforced? | **YES for a non-matching etag** → `Aborted` conflict; truly-stale-after-real-edit not tested | #6 |
 | SDK version for etag | **`databricks-sdk>=0.118.0`** (0.102.0 lacks it) — pinned | F-1 |
 | (new) DDL column DEFAULTs | need `delta.feature.allowColumnDefaults=supported` | F-4 |
 | (new) etag semantics | **content-based**; ACLs at `/api/2.0/permissions/genie/{id}` | F-5 |

@@ -11,8 +11,8 @@ import os
 
 from databricks.sdk import WorkspaceClient
 
-# Populated per-request by the header-capture middleware in app.py.
-header_store: contextvars.ContextVar = contextvars.ContextVar("header_store")
+# Populated per-request by the middleware in app.py (only the OBO token, not all headers).
+obo_token_var: contextvars.ContextVar = contextvars.ContextVar("obo_token", default=None)
 
 OBO_HEADER = "x-forwarded-access-token"
 
@@ -40,8 +40,7 @@ def get_user_workspace_client() -> WorkspaceClient:
     if not _running_in_app():
         return WorkspaceClient()
 
-    headers = header_store.get({})
-    token = headers.get(OBO_HEADER)
+    token = obo_token_var.get()
     if not token:
         raise ValueError(
             f"OBO token missing: no '{OBO_HEADER}' header. Confirm OBO is enabled in "

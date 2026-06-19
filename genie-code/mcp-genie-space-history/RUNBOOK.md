@@ -106,16 +106,17 @@ Verified working at **CAN MANAGE** in this spike; see `FINDINGS.md` #5 / F-5.
 
 ---
 
-## 🟢 #6 — Stale-etag rejection (optimistic lock)
+## 🟢 #6 — Non-matching-etag rejection (optimistic lock)
 
 ```bash
 python -m probes.run_all etag
 ```
 
-Reads `etag1`, does a valid update (→ `etag2`), then retries with the now-stale `etag1`
-(and a bogus etag as fallback). Expect `stale_update_rejected=true`. Note (finding F-5): the
-etag is **content-based**, so an identical re-apply keeps the same etag — a stale check only
-trips when the content actually differs (here, the bogus etag triggers the `Aborted` conflict).
+Reads `etag1`, does a valid update with it, re-uses `etag1` (accepted — content identical),
+then submits a **non-matching** etag. Expect `nonmatching_etag_rejected=true`. Note (finding F-5): the
+etag is **content-based**, so an identical re-apply keeps the same etag — the conflict check only
+trips when the etag doesn't match (here, the non-matching etag triggers the `Aborted` conflict).
+A *truly stale* etag (valid then invalidated by a real edit) is not tested by this no-op spike.
 
 Run everything at once:
 
