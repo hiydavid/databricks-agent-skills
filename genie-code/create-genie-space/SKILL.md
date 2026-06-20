@@ -7,6 +7,10 @@ description: "Create or refine an initial Databricks Genie Space design from Uni
 
 Create a focused Genie Space using Databricks-native context. Rely on Genie Code Agent mode to inspect Unity Catalog metadata, open workspace assets, run approved notebook or SQL editor steps, and read returned output.
 
+## Spec-Driven Intake
+
+When the user provides or references a completed `SPEC.md`, read that file before gathering requirements. When the user asks for a spec-driven workflow without a completed spec, use this skill folder's `SPEC.md` template as the intake checklist. Treat user-filled fields as requirements or hypotheses, fill Genie Code sections only with read-only workspace evidence, and keep unresolved `TBD` items visible as assumptions, limitations, or questions. Do not treat unconfirmed metric definitions, joins, fiscal rules, default filters, or benchmark answers in the spec as validated until workspace evidence or user confirmation supports them.
+
 ## Hard Rules
 
 - Use only bounded read-only SQL to inspect data: `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, and `information_schema`. Prefer metadata, narrow previews, partition/date filters, and sampled profiling; use broad full-table scans only when needed and approved.
