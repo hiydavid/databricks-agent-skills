@@ -3,9 +3,9 @@
 **Status:** Draft v1 (design only — no implementation)
 **Audience:** Engineers building the MCP server; reviewers of the `genie-code/` skill suite
 **Owner:** TBD
-**Last updated:** 2026-06-18
+**Last updated:** 2026-06-19
 
-> A custom Model Context Protocol (MCP) server, deployed and hosted on **Databricks Apps**, that the **Genie Code** skills in this directory call to **persist, version, and roll back** the artifacts they produce — Genie Space config snapshots, diagnostic write-ups, optimization runs, and benchmark eval results — to a governed **Unity Catalog table** (the queryable system-of-record).
+> A custom Model Context Protocol (MCP) server, deployed and hosted on **Databricks Apps**, that the **Genie Code** skills in this directory call to **persist and version** the artifacts they produce — Genie Space config snapshots, diagnostic write-ups, optimization runs, and benchmark eval results — to a governed **Unity Catalog table** (the queryable system-of-record). It also **serves the stored snapshots Genie Code uses to roll back a Space** — the MCP itself never edits a Space (rollback is performed by Genie Code, under the user's own CAN MANAGE permission).
 
 ---
 
@@ -19,7 +19,7 @@ The `genie-code/` skill suite (`create-genie-space`, `create-metric-view`, `diag
 - **`create-genie-space`** / **`create-metric-view`** emit a design proposal / YAML+DDL — **no snapshot/versioning**.
 - **No skill defines a machine-readable Genie Space config object**; config read/write is delegated entirely to Genie Code's native editor/tools.
 
-**The gap this server fills:** turn the skills' ad-hoc local files into a governed service that gives users (1) a **history** of every config change and analysis, (2) the ability to **diff** versions, and (3) a real, validated **rollback** of a Genie Space config to a prior snapshot.
+**The gap this server fills:** turn the skills' ad-hoc local files into a governed service that gives users (1) a **history** of every config change and analysis, (2) the ability to **diff** versions, and (3) the durable, queryable **snapshots that let Genie Code roll back** a Genie Space config to a prior version (the MCP stores and serves them; Genie Code performs the re-apply).
 
 The skill's own recommended schema in `optimization-guide.md` is the **contract we build against** — the MCP server is the durable backend for a layout the skills already know how to produce.
 
@@ -32,9 +32,9 @@ The skill's own recommended schema in `optimization-guide.md` is the **contract 
 - Deploy as a **custom MCP server on Databricks Apps**, reachable at `/mcp` over streamable HTTP, callable from **Genie Code** (and AI Playground).
 - Persist the concrete artifact types the skills emit, **versioned per `space_id`**, with parent/lineage pointers.
 - Persist to a **single backend: Unity Catalog Delta tables (one per artifact type)** in a `genie_space_history` schema (governed, queryable system-of-record). *(A workspace-file mirror was considered and explicitly dropped — see §7.2.)*
-- Provide a **lean MCP tool surface** (Genie Code caps total MCP access at **20 tools across all servers** — see §3), covering write / list / get / diff / rollback.
+- Provide a **lean MCP tool surface** (Genie Code caps total MCP access at **20 tools across all servers** — see §3), covering write / list / get / diff.
 - Act under the **calling user's identity (OBO)** so artifacts are owned/attributed correctly and Unity Catalog permissions apply.
-- Perform **rollback** by re-applying a stored `serialized_space` to the live Space via `w.genie.update_space` (full-replacement + body `etag` for optimistic concurrency), with server-side validation.
+- **Serve stored snapshots** (`serialized_space` + `etag`) so **Genie Code** can perform rollback under the user's own Space permissions. The MCP **never calls the Genie API** itself (no `get_space`/`update_space`); it only persists and returns what the caller gives it (§4, §8).
 
 ### Non-goals
 
@@ -54,7 +54,7 @@ These facts (from the investigation) directly constrain the design. Confidence +
 - Containerized serverless (Ubuntu 22.04, **Python 3.11**, default 2 vCPU / 6 GB), supports **FastAPI/Uvicorn**. Bind to `DATABRICKS_APP_PORT`. `app.yaml` at project root defines `command` + `env`. Deploy via `databricks apps create` / `databricks apps deploy` / `databricks sync` / DABs `resources.apps`.
   - [https://docs.databricks.com/aws/en/dev-tools/databricks-apps/](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/) · /app-runtime · /deploy
 - **Every app gets a dedicated service principal** (auto-injected `DATABRICKS_CLIENT_ID`/`DATABRICKS_CLIENT_SECRET`).
-- **OBO user auth (Public Preview — GA expected soon):** Databricks forwards the user token as the **`X-Forwarded-Access-Token`** header; app code passes it to SDK/SQL calls so the user's UC permissions (row filters, masks) apply. OBO is scope-gated (this server needs `sql` for warehouse queries + the Genie/dashboards scope for rollback). **Availability:** as of this writing OBO is **auto-enabled via the Previews portal for most workspaces**, so it is typically already on in the target workspace — confirm in the Previews portal.
+- **OBO user auth (Public Preview — GA expected soon):** Databricks forwards the user token as the **`X-Forwarded-Access-Token`** header; app code passes it to SDK/SQL calls so the user's UC permissions (row filters, masks) apply. OBO is scope-gated (this server needs only `sql` for warehouse queries; it does **not** call the Genie API, so no `genie`/`dashboards` scope is required). **Availability:** as of this writing OBO is **auto-enabled via the Previews portal for most workspaces**, so it is typically already on in the target workspace — confirm in the Previews portal.
   - [https://docs.databricks.com/aws/en/dev-tools/databricks-apps/auth](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/auth)
 - **App resources / bindings** grant the app SP a permission: SQL warehouse (`CAN USE`), serving endpoint, secrets, **UC tables (`SELECT`/`MODIFY`)**, UC volumes/functions, **Genie Spaces**, Lakebase. `valueFrom` in `app.yaml` resolves them to env vars.
   - [https://docs.databricks.com/aws/en/dev-tools/databricks-apps/resources](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/resources)
@@ -105,14 +105,14 @@ These facts (from the investigation) directly constrain the design. Confidence +
 │   │  • Auth layer:  read X-Forwarded-Access-Token → OBO WorkspaceClient│
 │   │  • Tool handlers (see §6)                                        │ │
 │   │  • Storage adapter:   UC Delta tables (per type) x7             │ │
-│   │  • Genie adapter:  read / update serialized_space (rollback)     │ │
+│   │  • (no Genie adapter — never calls the Genie API; UC-only)      │ │
 │   └────────────────────────────────────────────────────────────────┘ │
 │        │ execute_statement (OBO)                                       │
 │        ▼                                                                │
-│  UC tables: genie_space_history.*                                      │
-│        │ Genie API (OBO)                                               │
-│        ▼                                                                │
-│  Genie Space  (serialized_space)  ← rollback re-applies a snapshot     │
+│  UC tables: genie_space_history.*   (the only backend the app touches) │
+│                                                                        │
+│  (Genie Code — the caller — reads/edits the live Space itself; the app  │
+│   never calls the Genie API. See §4 / §8.)                              │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -121,21 +121,22 @@ These facts (from the investigation) directly constrain the design. Confidence +
 1. **HTTP/MCP layer** — FastAPI app exposing the MCP server at `/mcp`, stateless streamable HTTP, CORS-allowlisted to the workspace URL.
 2. **Auth layer** — per-request: extract `X-Forwarded-Access-Token`, build an OBO `WorkspaceClient`, resolve `current_user.me`. Never cache the user client.
 3. **Storage adapter** — `UCTableStore` (the sole backend) behind a `write` / `list` / `get` / `diff` interface.
-4. **Genie adapter** — `w.genie.get_space(include_serialized_space=True)` to read `serialized_space` + `etag`; `w.genie.update_space(...)` (full-replacement, body `etag`) to re-apply for rollback. No Genie Code native config-update tool exists, so the server owns this.
+4. **No Genie adapter** — the MCP **never calls the Genie API**. Genie Code already reads/edits the live Space under the user's own CAN MANAGE and passes `serialized_space` (+ its `etag`) into `save_config_snapshot`; rollback is performed by the skill, not the server (§8). The server's only backend is the UC table store.
 
 ---
 
 ## 5. Identity & auth model
 
-**Recommendation: OBO end-to-end for all artifact reads, writes, and rollbacks.** Rationale:
+**Recommendation: OBO for all artifact reads and writes (the UC data plane); the app SP is used only for provisioning/admin.** Under **Option A** the MCP **never calls the Genie API** (§4, §8), so there is no Space-mutation authorization boundary to enforce here — OBO's job is purely UC-level. Rationale:
 
 - Artifacts are attributed to the real human (native `created_by`), not a single shared SP.
 - UC **row filters isolate per user only when reads run as the user** — OBO makes per-user history "just work."
-- Rollback edits the Space under the user's own Genie permissions (correct authorization boundary).
+
+> ⚠️ **Open — gates the read identity:** OBO-for-reads only buys isolation if history is meant to be **private per user**. If history is **team-shared**, the row filter is moot and SP-reads (with a manual `WHERE created_by`) would also work. This private-vs-shared requirement is **not yet settled** — decide it before finalizing the read identity. (Rollback used to be the decisive OBO rationale; with Option A it no longer is — see §8.)
 
 **App service principal** is used only for **bootstrap/admin**: auto-creating the `genie_space_history` schema + the seven per-artifact tables at startup (catalog must pre-exist; SP granted `CREATE SCHEMA`), **reassigning ownership of the created objects to a durable group (`HISTORY_OWNER_GROUP`)**, applying the row-filter function, granting the OBO user group, and health checks. It is *not* the write actor for user artifacts. *(Why reassign ownership: deleting the app **deletes its dedicated SP** — see §7.1 — so SP-owned objects would be orphaned; a stable group owner keeps the history governable.)*
 
-**Required OAuth scopes for OBO:** `sql` (warehouse writes/reads) plus the Genie/dashboards scope for the rollback update — declared explicitly as the app's **`user_api_scopes`** (`sql`, `genie`, `dashboards`); a deployed app's OBO token otherwise defaults to **identity-only scopes** and warehouse/Genie calls fail (P0 finding **F-6**). *(No `files.files` scope — this server does not write workspace files.)* The OBO user must also hold the **Genie Space permission** to read/update the config — reading `serialized_space` requires **CAN EDIT**; the exact permission for `update_space` is **not documented** (REST ref, SDK, Conversation API guide) — best inference from the [Genie Space ACL matrix](https://docs.databricks.com/aws/en/security/auth/access-control/#genie-space-acls) is **at least CAN EDIT** (CAN MANAGE also works); verify at runtime.
+**Required OAuth scopes for OBO:** just **`sql`** (warehouse reads/writes) — declared explicitly as the app's **`user_api_scopes`**; a deployed app's OBO token otherwise defaults to **identity-only scopes** and warehouse calls fail (P0 finding **F-6**). *(No `genie`/`dashboards` scope — the MCP never calls the Genie API under Option A; no `files.files` — it writes no workspace files.)* The Genie Space permission needed to read/edit a Space (CAN EDIT / CAN MANAGE) is **Genie Code's concern**, not this server's — Genie Code already enforces it when it reads or rolls back a Space.
 
 **Failure mode:** if the forwarded token lacks a needed scope (admin-restricted), the tool returns a structured `scope_error` telling the user which scope to enable — never silently falls back to SP for a user-scoped write.
 
@@ -145,29 +146,28 @@ These facts (from the investigation) directly constrain the design. Confidence +
 
 ## 6. MCP tool surface
 
-**Design driver: the 20-tools-across-all-servers cap.** Keep this server **lean** so it doesn't starve the user's other MCP servers. Proposed **6 tools** (leaves 14 for everything else). A **minimal 4-tool** fallback is noted if budget is tight.
+**Design driver: the 20-tools-across-all-servers cap.** Keep this server **lean** so it doesn't starve the user's other MCP servers. Proposed **5 tools** (leaves 15 for everything else). A **minimal 3-tool** fallback is noted if budget is tight.
 
 
 | #   | Tool                      | Purpose                                                                                                            | Key inputs                                                                                                                                                       | Returns                                                                   |
 | --- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| 1   | `save_config_snapshot`    | Capture a Genie Space config version (the mandatory before/after snapshot).                                        | `space_id`, `serialized_space` (or `fetch_live=true` to pull it), `version_label`, `parent_config_version_id`, `run_id?`, `changed_surfaces?`, `change_summary?` | `config_version_id`, `version`, `config_hash`, `etag`                     |
+| 1   | `save_config_snapshot`    | Persist a Genie Space config version (the mandatory before/after snapshot). The caller supplies the config — the MCP does **not** fetch it.                                        | `space_id`, `serialized_space` (**required** — caller passes the live config), `etag?`, `version_label`, `parent_config_version_id`, `run_id?`, `changed_surfaces?`, `change_summary?`, `rollback_reference?` | `config_version_id`, `version`, `config_hash`, `etag`                     |
 | 2   | `save_report`             | Persist a Markdown artifact (diagnose write-up, query-optimization report, design proposal, metric-view YAML/DDL). | `space_id`, `artifact_type`, `title`, `content_md`, `run_id?`, `scores_findings?`                                                                                | `artifact_id`                                                             |
 | 3   | `record_optimization_run` | Persist a tuning run: run summary + per-question eval results + decision (the `runs/` + `eval_results/` records).  | `space_id`, `run_id`, run fields (see §7), `eval_results[]`, `decision`                                                                                          | `run_id`                                                                  |
 | 4   | `list_history`            | Timeline of versions/runs/reports for a Space.                                                                     | `space_id`, `artifact_type?`, `limit?`, `since?`                                                                                                                 | array of `{id, type, version, created_at, created_by, summary, decision}` |
 | 5   | `get_artifact`            | Fetch one stored item (full config JSON, report MD, run record).                                                   | `id` (config_version_id / artifact_id / run_id)                                                                                                                  | full record incl. `config_json` / `content_md`                            |
-| 6   | `rollback_config`         | Re-apply a stored config version to the live Genie Space, recording a new "rollback" version.                      | `space_id`, `config_version_id`, `expected_etag?`, `dry_run?`                                                                                                    | new `config_version_id`, applied `etag`, validation report                |
 
 
-**Helper (optional 7th):** `diff_configs(space_id, from_version_id, to_version_id)` → structured JSON diff of `serialized_space` (changed surfaces + before/after). Can also be implemented client-side by the skill from two `get_artifact` calls to save a tool slot.
+**Helper (optional 6th):** `diff_configs(space_id, from_version_id, to_version_id)` → structured JSON diff of `serialized_space` (changed surfaces + before/after). Lets the skill **preview a rollback diff before applying**. Can also be implemented client-side by the skill from two `get_artifact` calls to save a tool slot.
 
-**Minimal 4-tool fallback** (if 20-tool budget is contested): collapse 1–3 into a single generic `save_artifact(artifact_type, payload)`; keep `list_history`, `get_artifact`, `rollback_config`. Trades agent ergonomics/clarity for budget.
+**Minimal 3-tool fallback** (if 20-tool budget is contested): collapse 1–3 into a single generic `save_artifact(artifact_type, payload)`; keep `list_history` + `get_artifact`. Trades agent ergonomics/clarity for budget.
 
 **Tool-design rules**
 
 - Every tool takes `space_id`; every write stamps `created_by` (from `current_user.me`) and `created_at` server-side.
 - All inputs validated against the field contracts in §7; reject unknown `artifact_type`. Writes **route to the per-artifact table** (§7.1); `list_history` UNIONs across the tables and `get_artifact` resolves an id across them.
 - Idempotency: `save_*` accepts a client-supplied `idempotency_key` (e.g. `config_hash`) to avoid duplicate rows on retry.
-- `rollback_config` supports `dry_run` (validate + diff, do not apply) and `expected_etag` (optimistic lock); it captures snapshots via `w.genie.get_space(include_serialized_space=True)` and applies the restore via `w.genie.update_space(...)` (see §8).
+- Rollback has **no MCP tool**: the skill retrieves the target via `get_artifact`, re-applies it through Genie Code's own Space-edit path, and records the result via `save_config_snapshot` (see §8).
 
 ---
 
@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS ${HISTORY_CATALOG}.genie_space_history.config_snapsho
   config_hash         STRING,                     -- dedupe / integrity / idempotency key
   diff_patch          STRING,                     -- JSON diff vs parent (opt-in VARIANT)
   changed_surfaces    ARRAY<STRING>,              -- ['join_specs','column_configs',…]
-  etag                STRING,                     -- Genie space etag at capture (rollback optimistic-lock)
+  etag                STRING,                     -- caller-supplied Genie space etag at capture (Genie Code's rollback optimistic-lock)
   run_id              STRING,                     -- ties to an optimization_runs.run_id
   rollback_reference  STRING,                     -- set if this version was produced by a rollback
   change_summary      STRING
@@ -308,7 +308,7 @@ Carry over the skill's rules (`optimization-guide.md`): store hashes/digests/row
 
 ## 8. Rollback design
 
-**Resolved API (High confidence).** Genie Spaces expose first-class read + update REST/SDK operations, and **no Genie Code native config-update tool exists** (the managed Genie MCP servers are read-only). So the MCP applies rollback itself via the Genie API (**path X**):
+**Rollback is performed by Genie Code, not the MCP.** `optimize-genie-space` is already "the only skill that edits a Space" (§1) and does so under the **human's own CAN MANAGE** — so re-applying a prior config is just another skill-performed edit. The MCP is the **system of record**: it stores every config version (`serialized_space` + capture-time `etag` + metadata) and serves it back. **Under Option A the MCP never calls the Genie API** (no `get_space`, no `update_space`); this avoids the confused-deputy / privilege-escalation risk of a server holding broad Space-edit rights and moving the authorization decision out of Databricks into our code. The table below is the Genie API **Genie Code** uses for the read + re-apply (kept here for reference — it is **not** implemented by this server):
 
 
 | Operation        | REST                                                                 | SDK                                                                                                                 | Notes                                                                                                                        |
@@ -317,22 +317,20 @@ Carry over the skill's rules (`optimization-guide.md`): store hashes/digests/row
 | Update / restore | `PATCH /api/2.0/genie/spaces/{space_id}`                             | `w.genie.update_space(space_id, serialized_space=…, title=…, description=…, warehouse_id=…, parent_path=…, etag=…)` | `serialized_space` is a **full replacement**, sent as a JSON-**escaped string** at the top level (siblings: outer metadata). |
 
 
-Optimistic concurrency is a **body `etag` field** (not an `If-Match` header): pass it and the update *fails if the space changed since*; omit it to apply unconditionally. **Requires `databricks-sdk ≥ 0.118.0`** — earlier SDKs (e.g. 0.102.0) have no `etag` field on `GenieSpace`/`update_space`, so optimistic locking silently cannot run (P0 finding **F-1**; pin the SDK floor). The `etag` is **content-based** (P0 **F-5**); a non-matching etag is rejected with `Aborted` — the spike proved rejection of a *non-matching* etag, but a truly *stale-after-real-edit* etag was not separately tested. CLI equivalents exist (`databricks genie get-space` / `update-space`) but the CLI does not document `include_serialized_space`, so don't rely on it for snapshot capture.
+Optimistic concurrency is a **body `etag` field** (not an `If-Match` header): Genie Code passes it and the update *fails if the space changed since*; omitting it applies unconditionally. **Requires `databricks-sdk ≥ 0.118.0`** on the **Genie Code** side — earlier SDKs (e.g. 0.102.0) have no `etag` field on `GenieSpace`/`update_space`, so optimistic locking silently cannot run (P0 finding **F-1**; a floor for the skill, not the MCP). The `etag` is **content-based** (P0 **F-5**); a non-matching etag is rejected with `Aborted`. The MCP simply **stores and returns** whatever `etag` the caller captured at snapshot time — it does no Genie I/O of its own.
 
-**Flow:**
+**Flow (snapshot owned by the MCP; apply owned by Genie Code):**
 
-1. **Snapshot first (enforced).** `save_config_snapshot` (`fetch_live=true`) calls `get_space(..., include_serialized_space=True)` and stores `serialized_space` + outer metadata + `config_hash` + the Space `etag` *before* any edit. Refuse to proceed if the snapshot fails (mirrors the skill's hard rule).
-2. **Lineage.** `parent_version_id` + `run_id` + `baseline/candidate` pointers reconstruct the version DAG.
-3. **`rollback_config`** flow:
-  - Load the target version's stored `config_json` (+ outer metadata).
-  - **`dry_run`:** re-validate against the documented rules (`version: 2`; 32-char lowercase-hex IDs; required sorting of tables/metric-views/columns/ID-arrays; uniqueness; string ≤ 25,000 chars, repeated fields ≤ 10,000 items, ≤ 1 text instruction; three-level `catalog.schema.table` identifiers; join-spec shape) and return a diff vs the live space — **no write**.
-  - Re-read the live space for the current `etag`; if `expected_etag` is supplied and differs → return `conflict` (someone edited since).
-  - **Re-apply** via `update_space(..., serialized_space=<stored>, etag=<chosen>)` under OBO; Databricks validates the payload server-side and rejects invalid JSON.
-  - Record a **new** `config_version` (`artifact_type=config_snapshot`, `change_summary="rollback to <id>"`, `parent_version_id=<live>`) — rollback is itself versioned (forward-only; never destructive).
+1. **Snapshot first (enforced by the skill).** Before any edit, `optimize-genie-space` reads the live config (it already does this to edit it) and calls **`save_config_snapshot`**, passing `serialized_space` + the Space `etag` + `config_hash`. The MCP stores them and computes `version`/lineage. The skill's hard rule stands: refuse to edit if the snapshot didn't persist.
+2. **Lineage.** `parent_version_id` + `run_id` + `baseline/candidate` pointers reconstruct the version DAG (server-side, from the stored rows).
+3. **Restore (on a ROLL BACK decision) — driven by Genie Code:**
+  - **`get_artifact(config_version_id)`** → the stored `serialized_space` (+ outer metadata + `etag`). *(Optional preview: `diff_configs`, or two `get_artifact` calls, show the change before applying.)*
+  - **Genie Code re-applies** it to the live Space via **its own** edit path (`update_space`, full-replacement, body `etag` for the optimistic lock), under the user's CAN MANAGE. Databricks validates the payload server-side and rejects invalid JSON / a stale `etag`.
+  - Genie Code then records the result back via **`save_config_snapshot`** (`change_summary="rollback to <id>"`, `rollback_reference=<id>`, `parent_version_id=<live>`) — rollback stays **forward-only / append-only**; history is never destroyed.
 
-> **Permission note:** reading `serialized_space` requires **CAN EDIT** on the space; the docs do **not** name the exact permission `update_space` requires (best inference: at least CAN EDIT per the Genie Space ACL matrix, CAN MANAGE also works — verify at runtime via the P0 round-trip). The calling identity (the OBO user) must hold it. *(See §12 #1.)*
+> **Permission note:** the Genie Space permissions to read (`CAN EDIT`) and edit/roll back (`CAN EDIT` / `CAN MANAGE`) a Space are enforced by **Genie Code**, which already respects them. The **MCP server requires no Genie Space permission and no Genie OAuth scope** — it only touches UC tables. *(See §12 #1.)*
 
-Docs: REST `genie/updatespace` + `genie/getspace`; SDK `w.genie.update_space` / `get_space`; guide `genie/conversation-api#understanding-the-serialized_space-field`.
+Docs (for Genie Code's apply path, not the MCP): SDK `w.genie.update_space` / `get_space`; guide `genie/conversation-api#understanding-the-serialized_space-field`.
 
 ---
 
@@ -342,7 +340,7 @@ Docs: REST `genie/updatespace` + `genie/getspace`; SDK `w.genie.update_space` / 
 | Skill                  | Calls                                                                                                                                  | When                                                                                                                  |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `diagnose-genie-space` | `save_report(artifact_type="diagnose_report")`                                                                                         | After producing the Diagnostic Write-Up (gives it durable history; today it persists nothing).                        |
-| `optimize-genie-space` | `save_config_snapshot` (before edit, mandatory) → `record_optimization_run` (after eval) → `rollback_config` (on a ROLL BACK decision) | Replaces hand-written `config_versions/` + `runs/` files; makes "ROLL BACK" in the Acceptance Decision a real action. |
+| `optimize-genie-space` | `save_config_snapshot` (before edit, mandatory) → `record_optimization_run` (after eval) → on **ROLL BACK**: `get_artifact` the target snapshot, re-apply via the skill's own Space edit, then `save_config_snapshot` the result | Replaces hand-written `config_versions/` + `runs/` files; makes "ROLL BACK" a real action — the **skill** applies it (under the user's CAN MANAGE); the MCP stores/serves the snapshots. |
 | `optimize-genie-query` | `save_report(artifact_type="query_report")`                                                                                            | After producing the query-optimization report.                                                                        |
 | `create-genie-space`   | `save_report(artifact_type="design_proposal")` + optional `save_config_snapshot` on first apply                                        | Capture the initial proposal + the v1 config baseline.                                                                |
 | `create-metric-view`   | `save_report(artifact_type="metric_view_ddl")`                                                                                         | Snapshot the approved YAML/DDL for change history.                                                                    |
@@ -368,7 +366,7 @@ Integration is **opt-in and additive**: skills detect the MCP server's tools and
     - name: SQL_WAREHOUSE_ID
       valueFrom: sql-warehouse           # warehouse resource
   ```
-- **App resources to bind:** SQL warehouse (`CAN USE`) and (for rollback) Genie Space resources. Separately, **grant the app SP `USE CATALOG` + `CREATE SCHEMA` on `HISTORY_CATALOG`** (SQL grant) so it can auto-create the schema + tables; it then **reassigns ownership to `HISTORY_OWNER_GROUP`** (a durable group — so app deletion doesn't orphan the data) and grants `HISTORY_GRANTEE`. Add the app SP to `HISTORY_OWNER_GROUP` (or have a metastore admin run the one-time `OWNER TO`). Bind secrets only if needed.
+- **App resources to bind:** SQL warehouse (`CAN USE`). **No Genie Space resource binding** — under Option A the app never calls the Genie API. Separately, **grant the app SP `USE CATALOG` + `CREATE SCHEMA` on `HISTORY_CATALOG`** (SQL grant) so it can auto-create the schema + tables; it then **reassigns ownership to `HISTORY_OWNER_GROUP`** (a durable group — so app deletion doesn't orphan the data) and grants `HISTORY_GRANTEE`. Add the app SP to `HISTORY_OWNER_GROUP` (or have a metastore admin run the one-time `OWNER TO`). Bind secrets only if needed.
 - **MCP mount:** `mcp_server.http_app(stateless_http=True)` mounted at `/mcp`; **CORS allowlist** the workspace URL.
 - **Bind to** `DATABRICKS_APP_PORT`; handle SIGTERM within 15 s; keep handlers fast (no fixed per-request timeout documented → avoid long synchronous work; poll `execute_statement` rather than blocking).
 - **Deploy** via DABs (`resources.apps`) for reproducibility, or `databricks apps deploy`. Start from `databricks/app-templates → mcp-server-hello-world`.
@@ -384,16 +382,16 @@ Integration is **opt-in and additive**: skills detect the MCP server's tools and
 - Server-side SQL parameter binding everywhere; no string interpolation of user data.
 - Data minimization + redaction defaults (§7.3).
 - No anonymous access (Apps disallows it); Genie Code calls are authenticated per user.
-- All writes are **append-only / forward-only** — rollback creates a new version, never deletes history.
+- All writes are **append-only / forward-only** — rollback is recorded (by Genie Code) as a new version, never deletes history.
 
 ---
 
 ## 12. Open questions & verification items
 
-1. **Genie Space update API — RESOLVED (High confidence).** Rollback uses `PATCH /api/2.0/genie/spaces/{space_id}` / SDK `w.genie.update_space(...)`; read/snapshot uses `GET ...?include_serialized_space=true` / `w.genie.get_space(...)`. `serialized_space` is a top-level JSON-escaped **full-replacement** string; concurrency via a body `etag`. No Genie Code native update tool exists (managed Genie MCP is read-only) → the MCP applies the update itself (path X). See §8. **Remaining sub-item (runtime-verify only):** the exact Genie Space permission `update_space` requires is **not documented** anywhere (REST ref, SDK, Conversation API guide). Best inference from the [Genie Space ACL matrix](https://docs.databricks.com/aws/en/security/auth/access-control/#genie-space-acls): **at least CAN EDIT** (grants editing instructions / sample questions / included tables), and **CAN MANAGE** also works. Confirm via the P0 `get_space → update_space` round-trip on a throwaway Space. **P0 result (PR #22):** the round-trip works — verified at **CAN MANAGE** (identical-snapshot restore, `config_hash` unchanged); the **minimum was NOT isolated** (CAN EDIT floor untested with a CAN-EDIT-only principal). **F-1:** the body `etag` requires **`databricks-sdk ≥ 0.118.0`** — earlier SDKs (e.g. 0.102.0) have no `etag` field at all, so optimistic locking silently can't run. **F-5:** the `etag` is content-based; Genie Space ACLs are read via `GET /api/2.0/permissions/genie/{id}`.
-2. **OBO availability — RESOLVED (P0 live-workspace check).** Public Preview, **GA expected soon**, **auto-on via the Previews portal for most workspaces**. Action in the target workspace: confirm OBO is enabled in the **Previews portal** and that the app's OAuth scopes include **`sql`** + the **Genie/dashboards** scope. *(No `files.files` — UC-only.)* Keep a feature flag for graceful degradation. Tracked in the P0 spike. **P0 result (PR #22):** OBO is **enabled** in the target workspace — verified end-to-end through the deployed app (`current_user.me()` over `/mcp` returned the calling user via `X-Forwarded-Access-Token`). **F-6:** a deployed app's OBO token defaults to **identity-only scopes** — the app must explicitly declare `user_api_scopes` including **`sql`**, **`genie`**, and **`dashboards`**, else warehouse/Genie calls fail; this is an authorization step for the operator.
+1. **Genie Space read/update API — OUT OF SCOPE for the MCP (Option A).** The MCP **does not call the Genie API**; Genie Code reads and edits Spaces itself, under the user's CAN MANAGE, and passes `serialized_space` (+ `etag`) into `save_config_snapshot`. The Genie API details now belong to the **skill**, not this server: read/snapshot via `GET ...?include_serialized_space=true` / `w.genie.get_space(...)`; restore via `PATCH /api/2.0/genie/spaces/{id}` / `w.genie.update_space(...)` (full-replacement `serialized_space`, body `etag`). **F-1:** the body `etag` requires **`databricks-sdk ≥ 0.118.0`** (earlier SDKs have no `etag` field) — a floor for **Genie Code**, not the MCP. **F-5:** the `etag` is content-based. **P0 result (PR #22):** the `get_space → update_space` round-trip works at **CAN MANAGE** (CAN EDIT floor untested) — this confirms the **skill's** apply path and is no longer a gating item for the MCP build.
+2. **OBO availability — RESOLVED (P0 live-workspace check).** Public Preview, **GA expected soon**, **auto-on via the Previews portal for most workspaces**. Action in the target workspace: confirm OBO is enabled in the **Previews portal** and that the app's OAuth scopes include **`sql`** (only — under Option A no `genie`/`dashboards` is needed). *(No `files.files` — UC-only.)* Keep a feature flag for graceful degradation. Tracked in the P0 spike. **P0 result (PR #22):** OBO is **enabled** in the target workspace — verified end-to-end through the deployed app (`current_user.me()` over `/mcp` returned the calling user via `X-Forwarded-Access-Token`). **F-6:** a deployed app's OBO token defaults to **identity-only scopes** — the app must explicitly declare `user_api_scopes` including **`sql`** (the only scope this server needs under Option A; `genie`/`dashboards` were only for the now-dropped server-side rollback), else warehouse calls fail; this is an authorization step for the operator.
 3. **`VARIANT` support — RESOLVED (decision: default to `STRING`).** `VARIANT` is **Public Preview, not GA**; requires DBR/SQL **≥ 15.3** (confirmed) and is supported on current SQL warehouses in principle. Because a customer-deployable server should not hard-require a Preview feature, **JSON columns default to `STRING`** (queried via `col:path` / `from_json`), with **`VARIANT` as an opt-in** once verified on the target warehouse (`parse_json` returns VARIANT, so it is not a STRING-mode fallback). Keep a P0 smoke test: `CREATE TABLE (… VARIANT)` + `INSERT … parse_json(...)` on the actual warehouse type/channel. **P0 result (PR #22):** the smoke test **passed** on the target warehouse (`VARIANT` usable; parameterized `parse_json(:payload)` insert works) — so `VARIANT` is available, but the spec default **stays `STRING`** (opt-in `VARIANT`) for portability.
-4. **Tool-count budget — RESOLVED.** Ship the **6 core tools** by default; `diff_configs` is an optional 7th and can be folded into `get_artifact` to stay at 6. Document the **4-tool fallback** (§6) for users tight against the 20-tool cap. Guidance: this should be a user's only history MCP — budget accordingly against other connected servers.
+4. **Tool-count budget — RESOLVED.** Ship the **5 core tools** by default; `diff_configs` is an optional 6th and can be folded into `get_artifact`/the skill to stay at 5. Document the **3-tool fallback** (§6) for users tight against the 20-tool cap. Guidance: this should be a user's only history MCP — budget accordingly against other connected servers.
 5. **Skill reconciliation — RESOLVED (option B).** This MCP persists *only* to a UC table. `optimize-genie-space` **keeps** its local workspace-file layout as the **no-MCP fallback**; the MCP is the upgrade used when connected. Rejected: option (a), removing local persistence and requiring the MCP — that would make the skill unsafe/non-portable for rollback without the server installed. The follow-up skill edit is **deferred** and tracked in §13 (“Skill reconciliation”); the skills are **not** edited as part of MCP server development.
 6. **Catalog/schema naming + provisioning — RESOLVED.** **Separate tables per artifact type** under a fixed-name schema **`genie_space_history`** in a deployment-configured, **pre-existing** catalog (`HISTORY_CATALOG`). The app **auto-creates the schema + tables (not the catalog)** on first run; the operator must **grant the app SP `USE CATALOG` + `CREATE SCHEMA`** on that catalog. Configurable: `HISTORY_CATALOG`, `HISTORY_OWNER_GROUP`, `HISTORY_GRANTEE` (schema name fixed). See §7.1 / §10. **P0 result (PR #22):** confirmed — provisioning **as the app SP** failed with `PERMISSION_DENIED: User does not have BROWSE on Catalog '...'` until the grant is applied, empirically validating that the operator must grant the SP `USE CATALOG` + `CREATE SCHEMA` first (the SP's SQL otherwise executes fine on the warehouse). **F-4:** the §7.1 DDL also needs `delta.feature.allowColumnDefaults = 'supported'` in `TBLPROPERTIES` because of the `DEFAULT current_timestamp()` / `current_user()` columns — the first provision failed without it. **Ownership lifecycle (verified P0 research):** deleting the app **deletes its SP**, and SP-owned UC objects then become **orphaned** (not dropped, but only a metastore admin / catalog-or-schema owner / `MANAGE` holder can reassign). So the app SP **creates** the objects but **reassigns ownership to a durable group `HISTORY_OWNER_GROUP`** (Databricks-recommended: own production schemas/tables with a group, not an individual/SP) — the SP must be a member of that group to self-reassign, else a metastore admin runs the one-time `OWNER TO`; the SP then keeps explicit `SELECT`/`MODIFY` to write.
 
@@ -401,35 +399,35 @@ Integration is **opt-in and additive**: skills detect the MCP server's tools and
 
 - **P0 — Spike (de-risk before any build).** Goal: settle the runtime-only unknowns and prove the end-to-end mechanics on a throwaway Space, producing a short findings note that flips §12's residual verify-items to confirmed values (or records the fallback chosen). **Inputs the spike needs:** the **target workspace**, a **throwaway Genie Space ID** (spiker holds CAN EDIT / CAN MANAGE), a **pre-existing UC catalog** the app SP can be granted `CREATE SCHEMA` on, and a **SQL warehouse**. **Exit criteria:**
   - [x] **Hosting:** `mcp-server-hello-world` deployed on Databricks Apps; MCP reachable at `/mcp` (stateless streamable HTTP) and connectable from Genie Code.
-  - [x] **OBO identity (§12 #2):** an OBO `current_user.me()` call (via `X-Forwarded-Access-Token`) returns the *calling* user — confirms OBO is enabled in the workspace and the `sql` + Genie/dashboards scopes are present.
+  - [x] **OBO identity (§12 #2):** an OBO `current_user.me()` call (via `X-Forwarded-Access-Token`) returns the *calling* user — confirms OBO is enabled in the workspace and the `sql` scope is present (Option A needs no `genie`/`dashboards`).
   - [ ] **Auto-provision (§12 #6):** the app SP (granted `USE CATALOG` + `CREATE SCHEMA`) auto-creates the `genie_space_history` schema + one table via `… IF NOT EXISTS`; the **catalog is not created**.
   - [x] **VARIANT probe (§12 #3):** `CREATE TABLE (… VARIANT)` + `INSERT … parse_json(...)` on the chosen warehouse — succeeds → `VARIANT` usable; fails → default to `STRING`.
-  - [ ] **Genie round-trip (§12 #1 sub-item):** `get_space(include_serialized_space=True)` → `update_space(serialized_space=…, etag=…)` re-applies the snapshot on the throwaway Space; **record the minimum permission that actually worked** (CAN EDIT vs CAN MANAGE).
+  - [x] **Genie round-trip (now Genie Code's concern, not the MCP — §8):** `get_space(include_serialized_space=True)` → `update_space(serialized_space=…, etag=…)` re-applies a snapshot on the throwaway Space. P0 confirmed it works (at CAN MANAGE) — this validates the **skill's** apply path; under Option A the MCP does not perform it.
   - [x] **etag concurrency:** a stale-`etag` update is rejected (proves the optimistic lock).
   > **P0 OUTCOME — executed against the target workspace; see [PR #22](https://github.com/hiydavid/databricks-agent-skills/pull/22) (`genie-code/mcp-genie-space-history/`, `FINDINGS.md`):**
   >
-  > - ✅ **Hosting** — app deployed, `/mcp` stateless SSE serving, 6 tools listed (the Genie-Code “Add Server” click is the only manual step).
-  > - ✅ **OBO identity** — `current_user.me()` over `/mcp` returned the caller; the app must declare `user_api_scopes` `sql`+`genie`+`dashboards` (**F-6**).
+  > - ✅ **Hosting** — app deployed, `/mcp` stateless SSE serving, tool list returned over MCP (the spike stubbed the then-6 tools; the design is now **5** — §6). ⚠️ The Genie-Code “Add Server” UI click **plus an actual agent-driven call from Genie Code remain the one untested manual step** — the spike proved OBO via a `curl`-minted OAuth bearer, *not* from Genie Code itself.
+  > - ✅ **OBO identity** — `current_user.me()` over `/mcp` returned the caller; the app must declare `user_api_scopes` `sql` (under Option A; `genie`/`dashboards` no longer needed) (**F-6**).
   > - 🟡 **Auto-provision** — DDL + `IF NOT EXISTS` idempotency + catalog-not-created verified **as the user**; the **app-SP** path runs as the SP but is **blocked until the operator grants it `USE CATALOG`+`CREATE SCHEMA`** (proven via `PERMISSION_DENIED`). DDL needs `delta.feature.allowColumnDefaults` (**F-4**).
   > - ✅ **VARIANT** usable on the warehouse (default still `STRING`).
-  > - 🟡 **Genie round-trip** — works at **CAN MANAGE**; minimum **not isolated** (CAN EDIT floor untested). `etag` needs `databricks-sdk ≥ 0.118.0` (**F-1**).
+  > - ✅ **Genie round-trip** — works at **CAN MANAGE** (validates **Genie Code's** apply path; not an MCP concern under Option A). `etag` needs `databricks-sdk ≥ 0.118.0` on the skill side (**F-1**).
   > - ✅ **etag** — a **non-matching** etag is rejected (`Aborted`); a truly-stale-after-real-edit etag was not separately tested.
   >
-  > **Still open for the real build:** create the durable `HISTORY_OWNER_GROUP` and add the app SP to it (or have a metastore admin run the one-time `OWNER TO`); grant the app SP on the catalog; authorize `user_api_scopes`; isolate the true minimum Genie permission; test a truly-stale etag.
+  > **Still open for the real build:** create the durable `HISTORY_OWNER_GROUP` and add the app SP to it (or have a metastore admin run the one-time `OWNER TO`); grant the app SP on the catalog; authorize `user_api_scopes` (`sql`); settle private-vs-shared history (§5). *(No longer the MCP's concern under Option A: the minimum Genie permission and stale-etag behavior — those live with Genie Code's apply path.)*
 - **P1 — Write + read:** `save_config_snapshot`, `save_report`, `list_history`, `get_artifact` against the UC table (OBO + row filter). Wire `diagnose`/`optimize-query` reports.
-- **P2 — Runs + rollback:** `record_optimization_run`, `rollback_config` (dry-run → apply with etag). Wire `optimize-genie-space`.
+- **P2 — Runs + rollback wiring:** `record_optimization_run`. Wire `optimize-genie-space`'s snapshot + run + rollback calls — rollback = `get_artifact` the target snapshot, the **skill** re-applies it, then `save_config_snapshot` the result (the MCP has **no** rollback tool).
 - **P3 — Polish:** `diff_configs`, redaction defaults, observability, DABs packaging.
 
 ### Skill reconciliation (deferred follow-up — NOT STARTED)
 
 **Decision: option B** — keep the skills' local persistence as the no-MCP fallback. This is a **separate, deferred workstream from building the MCP server; do not edit the skills now.** When scheduled, it is a docs/prose change to the `genie-code/` skills (no code), best sequenced **after P1–P2** so the skill text points at tools that already exist:
 
-- [ ] `optimize-genie-space/SKILL.md` — reframe the persistence steps to an order of preference: **(1)** if the history MCP is connected, capture snapshots / record runs / perform rollback via its tools; **(2)** otherwise fall back to the local workspace-file layout (current behavior). Keep the *mandatory pre-edit snapshot* guarantee intact under **both** paths.
+- [ ] `optimize-genie-space/SKILL.md` — reframe the persistence steps to an order of preference: **(1)** if the history MCP is connected, capture snapshots / record runs via its tools and retrieve the snapshot to roll back to via `get_artifact` (the **skill** still applies the restore itself); **(2)** otherwise fall back to the local workspace-file layout (current behavior). Keep the *mandatory pre-edit snapshot* guarantee intact under **both** paths.
 - [ ] `optimize-genie-space/references/optimization-guide.md` — **retain the field schema** (it is the shared contract the UC table mirrors); relabel the file layout as the *fallback* store, not the primary one; add a short “History MCP” subsection describing the tool-based path.
 - [ ] `diagnose-genie-space/SKILL.md` and `optimize-genie-query/SKILL.md` — add a one-line note that the write-up / report can be persisted via `save_report` when the MCP is connected.
 - [ ] Do **not** delete any schema definitions — “removing persistence” (option A) was rejected; fallback writing stays.
 
 Owner: TBD.
 
-> Implementation note: every code task above (server scaffold, tool handlers, storage adapters, Genie adapter, tests) should be built by a coding agent and cross-reviewed by a different vendor; the per-skill `SKILL.md` pointers are docs edits. This document is design-only.
+> Implementation note: every code task above (server scaffold, tool handlers, storage adapters, tests) should be built by a coding agent and cross-reviewed by a different vendor; the per-skill `SKILL.md` pointers are docs edits. This document is design-only. *(There is no Genie adapter under Option A — the MCP never calls the Genie API.)*
 
