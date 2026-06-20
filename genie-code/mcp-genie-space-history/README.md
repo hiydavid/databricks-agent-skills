@@ -1,4 +1,4 @@
-# mcp-genie-space-history
+# (WIP) mcp-genie-space-history
 
 Home of the **Genie Space History MCP** server. Design lives one level up in
 `../genie-space-history-mcp-design.md`.
@@ -25,14 +25,5 @@ Home of the **Genie Space History MCP** server. Design lives one level up in
 | 4 | VARIANT probe → usable or default STRING | `variant` probe / `variant_probe` tool |
 | 5 | Genie `get_space` → `update_space` round-trip; record min permission | `roundtrip` probe / `genie_roundtrip` tool |
 | 6 | Stale-etag update rejected (optimistic lock) | `etag` probe / `genie_etag_check` tool |
-
-## Quick start
-
-```bash
-cd spike
-uv venv && source .venv/bin/activate && uv pip install -r requirements.txt
-databricks auth login --host https://fevm-dhuang.cloud.databricks.com --profile fevm-dhuang
-python -m probes.run_all          # criteria #3–#6
-```
 
 See `RUNBOOK.md` for the full sequence and `FINDINGS.md` for results.
