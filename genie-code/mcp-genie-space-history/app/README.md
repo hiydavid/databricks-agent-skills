@@ -42,13 +42,17 @@ server/
 ## Identity & auth (spec §5)
 
 - **OBO for all reads/writes.** A fresh `WorkspaceClient` is built per request from
-  the `X-Forwarded-Access-Token` header (never cached). `created_by` is stamped from
-  `current_user.me()`; `created_at` is server-side (`current_timestamp()`).
+  the `X-Forwarded-Access-Token` header (never cached). `created_by` and `created_at`
+  are stamped **server-side** via SQL `current_user()` / `current_timestamp()`, so
+  `created_by` always equals the `SESSION_USER()` the `only_mine` row filter compares
+  against (a user can always read back their own writes).
 - **App SP for bootstrap/admin only** — provisioning. Never the write actor for a
   user artifact; the server **never silently falls back to the SP** for a user write.
-- On a missing token / disabled OBO / missing `sql` scope, tools return a structured
-  `scope_error` telling the user to enable the `sql` scope (`OBO_ENABLED` is a feature
-  flag for graceful degradation where OBO isn't enabled yet).
+- On a missing token / disabled OBO / missing `sql` scope — including a token/identity
+  auth failure (SDK `Unauthenticated`/401) while resolving the caller — tools return a
+  structured `scope_error` telling the user to enable the `sql` scope. A UC grant denial
+  (`PERMISSION_DENIED`/403) is deliberately **not** relabeled a scope error. `OBO_ENABLED`
+  is a feature flag for graceful degradation where OBO isn't enabled yet.
 
 ## Configuration (env — see `app.yaml`)
 
@@ -69,15 +73,42 @@ The schema name is fixed at `genie_space_history`. `app.yaml` declares
 
 On startup inside a deployed App, the SP idempotently: creates the schema + all 7
 tables (with `delta.enableRowTracking` + `delta.feature.allowColumnDefaults`), creates
-`only_mine`, applies the row filter to each table, grants `HISTORY_GRANTEE`, keeps the
-SP's own `SELECT`/`MODIFY`, then reassigns `OWNER TO HISTORY_OWNER_GROUP`. The
-**catalog is never created**. Ownership reassignment **may fail** if the SP isn't a
-member of the owner group — that is captured as a structured WARNING and startup
-continues (an operator/metastore admin runs the one-time `OWNER TO`).
+`only_mine`, and applies the row filter to each table. **Row isolation is required, not
+best-effort:** `HISTORY_GRANTEE` is granted `SELECT`/`MODIFY` **per table, only on
+tables whose row filter actually applied** (never schema-wide). If the `only_mine`
+function or any table's filter fails, that table's grant is **withheld** and
+`report["ok"]` is `False` — the grantee can never reach an unfiltered table. The SP
+keeps its own per-table `SELECT`/`MODIFY`. **Only** the final `OWNER TO
+HISTORY_OWNER_GROUP` reassignment may warn-and-continue (it legitimately fails if the
+SP isn't a member of the owner group; an operator/metastore admin runs the one-time
+`OWNER TO`). The **catalog is never created**, and startup never crashes.
 
 **Operator prerequisites the app cannot self-perform** (spec §10): grant the app SP
 `USE CATALOG` + `CREATE SCHEMA` on `HISTORY_CATALOG`; create/join `HISTORY_OWNER_GROUP`;
 confirm OBO is enabled in the Previews portal.
+
+## Concurrency & idempotency (spec §6/§11)
+
+UC SQL warehouses enforce **no** PK/unique constraints or row locks, and give the app
+no multi-statement transaction. `save_config_snapshot` therefore cannot make
+`MAX(version)+1 → INSERT` atomic. It uses a bounded **optimistic-retry**:
+
+1. **Idempotency** — the logical id is derived deterministically from the idempotency
+   key (which defaults to `config_hash`). A read-before-write returns the existing row
+   on a repeat key, so a sequential retry never inserts a second row.
+2. **Version monotonicity** — after inserting, the write verifies no *other* config
+   grabbed the same `version`. On a collision the writers tie-break by id (the larger id
+   backs out its row via `DELETE` and retries with a freshly computed version); after
+   `MAX_SAVE_ATTEMPTS` it surfaces a clean `contention` error rather than leaving a
+   colliding row.
+
+**Residual race (documented, not silently ignored):** two writes issued *simultaneously*
+with the **same idempotency key** can each pass read-before-write and land byte-identical
+rows; a targeted `DELETE` can't distinguish them, so a transient duplicate may persist —
+the logical result returned is still single and correct. The normal skill path is a
+single writer per `(space, user)` and is unaffected. A fully race-free guarantee is not
+achievable on UC SQL-warehouse semantics in P1; closing it would need a serializing
+mechanism (e.g. a Lakebase/transactional sequence) — out of P1 scope.
 
 ## Dev inner loop
 

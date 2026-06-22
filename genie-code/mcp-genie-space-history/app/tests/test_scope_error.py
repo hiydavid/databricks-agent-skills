@@ -78,6 +78,43 @@ def test_scope_error_classifier_is_conservative():
     assert looks_like_scope_error(SqlError("invalid_token")) is True
 
 
+# --- N2: token/identity-auth failures during current_user.me() -> scope_error ---
+def test_classifier_detects_unauthenticated_by_class_name():
+    # The SDK's Unauthenticated (401) is detected by class name, even with a generic
+    # message; PermissionDenied (403, a UC grant denial) is NOT a scope error.
+    class Unauthenticated(Exception):
+        pass
+
+    class PermissionDenied(Exception):
+        pass
+
+    assert looks_like_scope_error(Unauthenticated("token rejected")) is True
+    assert looks_like_scope_error(PermissionDenied("forbidden")) is False
+
+
+def test_identity_resolution_auth_failure_maps_to_scope_error(monkeypatch, settings):
+    # An auth failure raised while building the OBO store (e.g. me()) -> scope_error,
+    # not internal_error.
+    class Unauthenticated(Exception):
+        pass
+
+    def boom(_settings):
+        raise Unauthenticated("401: token lacks required scope")
+
+    monkeypatch.setattr(tools, "_build_user_store", boom)
+    result = tools._run_tool(settings, "save_config_snapshot", _never_runs)
+    assert result["error_type"] == "scope_error"
+
+
+def test_generic_internal_error_is_not_scope_error(monkeypatch, settings):
+    def boom(_settings):
+        raise RuntimeError("something unrelated blew up")
+
+    monkeypatch.setattr(tools, "_build_user_store", boom)
+    result = tools._run_tool(settings, "save_config_snapshot", _never_runs)
+    assert result["error_type"] == "internal_error"
+
+
 def test_scope_error_payload_shape():
     payload = scope_error_payload("nope", required_scope="sql")
     assert payload == {

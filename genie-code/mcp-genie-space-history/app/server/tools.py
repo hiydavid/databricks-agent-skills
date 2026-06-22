@@ -8,8 +8,9 @@ Split into two layers so the logic is unit-testable with no live workspace:
   * :func:`register_tools` — wraps each core fn with OBO identity resolution and
     structured error handling, then registers it on the FastMCP server.
 
-All reads/writes run OBO (the calling user). ``created_by`` is stamped from
-``current_user.me()`` and ``created_at`` server-side (spec §6).
+All reads/writes run OBO (the calling user). ``created_by``/``created_at`` are
+stamped server-side via SQL ``current_user()``/``current_timestamp()`` (spec §6),
+so ``created_by`` always matches the ``SESSION_USER()`` the row filter compares.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from . import auth, schema
 from .config import Settings
 from .errors import (
     OBOScopeError,
+    StorageContentionError,
     ToolValidationError,
     error_payload,
     looks_like_scope_error,
@@ -167,9 +169,23 @@ def get_artifact_core(store: UCTableStore, *, id: str) -> dict:
 # OBO identity + structured error wrapping
 # ---------------------------------------------------------------------------
 def _build_user_store(settings: Settings) -> UCTableStore:
-    """Build an OBO-backed store for the calling user (raises OBOScopeError if no token)."""
+    """Build an OBO-backed store for the calling user.
+
+    Raises :class:`OBOScopeError` when the token is absent / OBO is disabled. A
+    token/identity-auth failure from ``current_user.me()`` (e.g. SDK ``Unauthenticated``)
+    is also re-raised as :class:`OBOScopeError` so it surfaces as a ``scope_error``
+    rather than a generic internal error (a deployed app's OBO token can default to
+    identity-only scopes — spec §5, P0 finding F-6).
+    """
     w = auth.get_user_workspace_client(obo_enabled=settings.obo_enabled)
-    me = w.current_user.me()
+    try:
+        me = w.current_user.me()
+    except OBOScopeError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if looks_like_scope_error(exc):
+            raise OBOScopeError(f"OBO identity resolution failed: {exc}") from exc
+        raise
     user_name = me.user_name or "unknown"
     return UCTableStore(make_sql_exec(w, settings.sql_warehouse_id), settings, user_name=user_name)
 
@@ -190,6 +206,9 @@ def _run_tool(settings: Settings, tool_name: str, core: Callable[[UCTableStore],
     except ToolValidationError as exc:
         logger.info("tool=%s validation_error: %s", tool_name, exc)
         return validation_error_payload(str(exc))
+    except StorageContentionError as exc:
+        logger.warning("tool=%s contention: %s", tool_name, exc)
+        return error_payload("contention", str(exc))
     except SqlError as exc:
         if looks_like_scope_error(exc):
             logger.warning("tool=%s scope_error (sql): %s", tool_name, exc)
@@ -197,6 +216,10 @@ def _run_tool(settings: Settings, tool_name: str, core: Callable[[UCTableStore],
         logger.error("tool=%s sql_error: %s", tool_name, exc)
         return error_payload("sql_error", str(exc))
     except Exception as exc:  # noqa: BLE001 — surface anything else as a structured error
+        # Classify a token/OAuth failure as scope_error; everything else is internal.
+        if looks_like_scope_error(exc):
+            logger.warning("tool=%s scope_error (auth): %s", tool_name, exc)
+            return scope_error_payload(str(exc))
         logger.exception("tool=%s internal_error: %s", tool_name, exc)
         return error_payload("internal_error", str(exc))
 
@@ -256,14 +279,19 @@ def register_tools(mcp_server, settings: Settings) -> None:
         config_version_id: Optional[str] = None,
         skill_name: Optional[str] = None,
         redacted: bool = True,
+        redact: Optional[bool] = None,
         idempotency_key: Optional[str] = None,
     ) -> dict:
         """Persist a Markdown artifact, routed by ``artifact_type`` to its table.
 
         ``diagnose_report`` → diagnose_reports, ``query_report`` → query_reports,
         ``design_proposal`` → design_proposals, ``metric_view_ddl`` → metric_view_artifacts.
-        Unknown types are rejected. ``redacted`` defaults to true. Returns ``{artifact_id}``.
+        Unknown types are rejected. Returns ``{artifact_id}``.
+
+        Redaction defaults to true. The spec spells the flag ``redact`` (§6/§7.3); both
+        ``redact`` and ``redacted`` are accepted (``redact`` wins if both are sent).
         """
+        effective_redacted = redact if redact is not None else redacted
         return _run_tool(
             settings,
             "save_report",
@@ -278,7 +306,7 @@ def register_tools(mcp_server, settings: Settings) -> None:
                 summary=summary,
                 config_version_id=config_version_id,
                 skill_name=skill_name,
-                redacted=redacted,
+                redacted=effective_redacted,
                 idempotency_key=idempotency_key,
             ),
         )

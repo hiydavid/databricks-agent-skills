@@ -46,6 +46,14 @@ def _run_startup_bootstrap() -> None:
         logger.info("bootstrap report: %s", report)
         if report.get("warnings"):
             logger.warning("bootstrap warnings: %s", report["warnings"])
+        if not report.get("ok"):
+            # Row isolation / table creation incomplete — grantee access may be withheld.
+            logger.error(
+                "bootstrap NOT ok: errors=%s grants_withheld=%s — row isolation incomplete; "
+                "an operator must resolve before relying on per-user history",
+                report.get("errors"),
+                report.get("grants_withheld"),
+            )
     except Exception as exc:  # noqa: BLE001 — startup must survive bootstrap failures
         logger.exception("bootstrap failed (continuing startup): %s", exc)
 

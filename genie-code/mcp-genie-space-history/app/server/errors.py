@@ -13,11 +13,21 @@ actionable, machine-readable result. The two shapes that matter most:
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 
 class ToolValidationError(ValueError):
     """An input failed validation against the §7 field contracts."""
+
+
+class StorageContentionError(RuntimeError):
+    """A write could not converge under concurrency (e.g. version allocation).
+
+    UC SQL warehouses enforce no PK/unique constraints or row locks, so writes use
+    a bounded optimistic-retry (see :mod:`server.store`). When that retry budget is
+    exhausted the tool surfaces this as a clean ``contention`` error rather than
+    leaving a duplicate/colliding row.
+    """
 
 
 class OBOScopeError(RuntimeError):
@@ -66,28 +76,27 @@ _SCOPE_MARKERS = (
     "invalid access token",
     "missing scope",
     "unauthorized",
+    "unauthenticated",
     "401",
 )
+
+# SDK exception class names that are unambiguously token/identity-auth failures
+# (401-class). ``PermissionDenied`` (403, a UC grant issue) is deliberately EXCLUDED
+# so it is never relabeled a scope error.
+_SCOPE_EXCEPTION_NAMES = ("Unauthenticated",)
 
 
 def looks_like_scope_error(exc: Exception) -> bool:
     """Heuristic: does this SQL/auth failure look like a missing OAuth scope?
 
     The definitive scope signal is the absent OBO token (handled in ``auth`` via
-    :class:`OBOScopeError`). This only catches the token-level authorization
+    :class:`OBOScopeError`). This also catches the token-level authorization
     failures a deployed app hits when its OBO token defaults to identity-only
-    scopes (spec §5, P0 finding F-6).
+    scopes (spec §5, P0 finding F-6) — including the SDK ``Unauthenticated`` (401)
+    raised while resolving the caller's identity. ``PermissionDenied`` (403, a UC
+    grant denial) is intentionally NOT treated as a scope error.
     """
+    if type(exc).__name__ in _SCOPE_EXCEPTION_NAMES:
+        return True
     msg = str(exc).lower()
     return any(marker in msg for marker in _SCOPE_MARKERS)
-
-
-def exception_to_payload(
-    exc: Exception, *, default_type: str = "error"
-) -> Optional[dict[str, Any]]:
-    """Map a known exception type to a structured payload, or ``None`` if unknown."""
-    if isinstance(exc, OBOScopeError):
-        return scope_error_payload(str(exc), required_scope=exc.required_scope)
-    if isinstance(exc, ToolValidationError):
-        return validation_error_payload(str(exc))
-    return None

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
+from fastmcp import FastMCP
 
 from server import schema
+from server import tools as tools_module
 from server.config import Settings
 from server.errors import ToolValidationError
 from server.store import UCTableStore
-from server.tools import save_report_core
+from server.tools import register_tools, save_report_core
 
 from .conftest import InMemoryBackend, param_value
 
@@ -120,9 +124,54 @@ def test_report_idempotency_key_dedupes(store, backend):
     assert len(backend.inserts_into(schema.DIAGNOSE_REPORTS)) == 1
 
 
-def test_created_by_stamped_on_reports(store, backend):
+def test_created_by_is_server_side_current_user(store, backend):
     save_report_core(
         store, space_id="s1", artifact_type="diagnose_report", title="t", content_md="c"
     )
+    sql, params = backend.inserts_into(schema.DIAGNOSE_REPORTS)[-1]
+    # created_by uses current_user() so it matches the only_mine SESSION_USER() filter.
+    assert "current_user()" in sql
+    assert param_value(params, "created_by") is None
+
+
+# --- N1: accept the spec's `redact` spelling as an alias for `redacted` -----
+def _registered_tools(settings: Settings):
+    mcp = FastMCP(name="test")
+    register_tools(mcp, settings)
+    return asyncio.run(mcp.get_tools())  # type: ignore[attr-defined]
+
+
+def test_save_report_schema_accepts_both_redact_and_redacted(settings):
+    tool = _registered_tools(settings)["save_report"]
+    props = tool.parameters["properties"]
+    assert "redact" in props
+    assert "redacted" in props
+
+
+def test_redact_alias_overrides_redacted(settings, monkeypatch):
+    backend = InMemoryBackend()
+    store = UCTableStore(backend, settings, user_name="alice@example.com")
+    monkeypatch.setattr(tools_module, "_build_user_store", lambda _s: store)
+
+    tool = _registered_tools(settings)["save_report"]
+    result = tool.fn(
+        space_id="s1",
+        artifact_type="diagnose_report",
+        title="t",
+        content_md="c",
+        redact=False,
+    )
+    assert result["ok"] is True
     _sql, params = backend.inserts_into(schema.DIAGNOSE_REPORTS)[-1]
-    assert param_value(params, "created_by") == "alice@example.com"
+    assert param_value(params, "redacted") == "false"
+
+
+def test_redact_defaults_true_via_tool(settings, monkeypatch):
+    backend = InMemoryBackend()
+    store = UCTableStore(backend, settings, user_name="alice@example.com")
+    monkeypatch.setattr(tools_module, "_build_user_store", lambda _s: store)
+
+    tool = _registered_tools(settings)["save_report"]
+    tool.fn(space_id="s1", artifact_type="query_report", title="t", content_md="c")
+    _sql, params = backend.inserts_into(schema.QUERY_REPORTS)[-1]
+    assert param_value(params, "redacted") == "true"

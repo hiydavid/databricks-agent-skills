@@ -49,6 +49,14 @@ class InMemoryBackend:
         self.rows: dict[str, dict[str, dict]] = defaultdict(dict)
         # configurable canned result for list_history queries
         self.list_result = QueryResult([], [])
+        # Concurrency simulation knobs for the config_snapshots verification query:
+        #   pending_conflict    — a phantom row returned ONCE then cleared (a concurrent
+        #                         writer that landed between our MAX(version) read + insert)
+        #   persistent_conflict — a phantom row returned on EVERY verification (never converges)
+        #   inject_dup_id       — return our own row twice ONCE (same-key concurrent insert)
+        self.pending_conflict: Optional[dict] = None
+        self.persistent_conflict: Optional[dict] = None
+        self.inject_dup_id: bool = False
 
     # --- call recording helpers -------------------------------------------
     def inserts_into(self, table_name: str) -> list[tuple[str, list[Param]]]:
@@ -60,6 +68,9 @@ class InMemoryBackend:
 
     def all_inserts(self) -> list[tuple[str, list[Param]]]:
         return [(sql, params) for sql, params in self.calls if sql.lstrip().startswith("INSERT")]
+
+    def deletes(self) -> list[tuple[str, list[Param]]]:
+        return [(sql, params) for sql, params in self.calls if sql.lstrip().startswith("DELETE")]
 
     # --- the SqlExec interface --------------------------------------------
     def __call__(self, sql: str, parameters: Optional[Sequence[Param]] = None) -> QueryResult:
@@ -75,6 +86,9 @@ class InMemoryBackend:
                 if row.get("space_id") == space_id and row.get("version") is not None
             ]
             return QueryResult(["next_version"], [[(max(versions) + 1) if versions else 1]])
+
+        if "config_version_id = :id OR version = :version" in sql:  # _snapshot_conflicts
+            return self._conflicts(params)
 
         if "ORDER BY created_at DESC LIMIT" in sql:  # list_history
             return self.list_result
@@ -96,7 +110,43 @@ class InMemoryBackend:
                 self.rows[table][key] = row
             return QueryResult([], [])
 
+        if stripped.startswith("DELETE"):  # _delete_snapshot
+            table = _table_of(sql) or ""
+            id_value = param_value(params, "id")
+            version = param_value(params, "version")
+            row = self.rows.get(table, {}).get(id_value or "")
+            if id_value is not None and row is not None and str(row.get("version")) == str(version):
+                del self.rows[table][id_value]
+            return QueryResult([], [])
+
         return QueryResult([], [])
+
+    _CONFLICT_COLS = ["config_version_id", "version", "config_hash", "etag"]
+
+    def _conflicts(self, params: Sequence[Param]) -> QueryResult:
+        space_id = param_value(params, "space_id")
+        id_value = param_value(params, "id")
+        version = param_value(params, "version")
+        matched: list[dict] = [
+            r
+            for r in self.rows[schema.CONFIG_SNAPSHOTS].values()
+            if r.get("space_id") == space_id
+            and (r.get("config_version_id") == id_value or str(r.get("version")) == str(version))
+        ]
+        out = [{c: r.get(c) for c in self._CONFLICT_COLS} for r in matched]
+
+        if self.inject_dup_id:
+            ours = next((r for r in out if r["config_version_id"] == id_value), None)
+            if ours is not None:
+                out.append(dict(ours))
+            self.inject_dup_id = False
+        if self.pending_conflict is not None:
+            out.append({c: self.pending_conflict.get(c) for c in self._CONFLICT_COLS})
+            self.pending_conflict = None
+        if self.persistent_conflict is not None:
+            out.append({c: self.persistent_conflict.get(c) for c in self._CONFLICT_COLS})
+
+        return QueryResult(self._CONFLICT_COLS, [[r[c] for c in self._CONFLICT_COLS] for r in out])
 
 
 @pytest.fixture

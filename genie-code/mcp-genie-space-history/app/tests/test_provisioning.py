@@ -50,13 +50,29 @@ def test_bootstrap_happy_path(monkeypatch, settings):
         ), table_name
     assert sorted(report["tables_created"]) == sorted(schema.ALL_TABLE_NAMES)
 
-    # Row-filter function + row filters on each table.
+    # Row-filter function + row filters on each table; all 7 reported as filtered.
     assert any("CREATE FUNCTION IF NOT EXISTS" in stmt for stmt in recorded)
     for table_name in schema.ALL_TABLE_NAMES:
         assert any("SET ROW FILTER" in stmt and table_name in stmt for stmt in recorded)
+    assert sorted(report["row_filtered"]) == sorted(schema.ALL_TABLE_NAMES)
+    assert report["grants_withheld"] == []
+    assert report["errors"] == []
 
-    # Grants to the grantee + ownership handoff to the durable group.
-    assert any("GRANT USE SCHEMA, SELECT, MODIFY ON SCHEMA" in stmt for stmt in recorded)
+    # Grantee gets PER-TABLE SELECT/MODIFY (never schema-wide) + USE SCHEMA traversal.
+    assert not any("SELECT, MODIFY ON SCHEMA" in stmt for stmt in recorded)
+    assert any(
+        "GRANT USE SCHEMA ON SCHEMA" in stmt and settings.history_grantee in stmt
+        for stmt in recorded
+    )
+    for table_name in schema.ALL_TABLE_NAMES:
+        assert any(
+            "GRANT SELECT, MODIFY ON TABLE" in stmt
+            and table_name in stmt
+            and settings.history_grantee in stmt
+            for stmt in recorded
+        ), table_name
+
+    # Ownership handoff to the durable group.
     assert any("OWNER TO" in stmt and settings.history_owner_group in stmt for stmt in recorded)
 
 
@@ -74,11 +90,57 @@ def test_ownership_failure_is_warning_not_crash(monkeypatch, settings):
     _install_fake_exec(monkeypatch, fail_substrings=("OWNER TO",))
     report = provisioning.bootstrap(_fake_workspace_client(), settings)
 
-    # The data path is still usable (schema + tables created) ...
+    # Row isolation is intact (function + all filters applied) so ok stays True ...
     assert report["ok"] is True
-    # ... and every OWNER TO failure was captured as a structured warning.
+    # ... OWNER TO is the ONLY step allowed to warn-and-continue ...
     assert report["warnings"]
     assert all("owner_to" in w for w in report["warnings"])
+    # ... and it is NOT treated as a hard error.
+    assert report["errors"] == []
+
+
+def test_row_filter_failure_withholds_grant_and_fails(monkeypatch, settings):
+    # Fail the row filter for exactly one table.
+    target = schema.CONFIG_SNAPSHOTS
+    recorded = _install_fake_exec(monkeypatch, fail_substrings=(f"`{target}` SET ROW FILTER",))
+    report = provisioning.bootstrap(_fake_workspace_client(), settings)
+
+    # Bootstrap is NOT ok because not every table is row-filtered.
+    assert report["ok"] is False
+    assert target not in report["row_filtered"]
+    # The grantee grant on the unfiltered table is WITHHELD (security gate).
+    assert target in report["grants_withheld"]
+    assert not any(
+        "GRANT SELECT, MODIFY ON TABLE" in stmt
+        and target in stmt
+        and settings.history_grantee in stmt
+        for stmt in recorded
+    )
+    # Other (filtered) tables still get their grantee grant.
+    other = schema.QUERY_REPORTS
+    assert other in report["row_filtered"]
+    assert any(
+        "GRANT SELECT, MODIFY ON TABLE" in stmt
+        and other in stmt
+        and settings.history_grantee in stmt
+        for stmt in recorded
+    )
+
+
+def test_function_failure_blocks_all_filters_and_grantee_access(monkeypatch, settings):
+    recorded = _install_fake_exec(monkeypatch, fail_substrings=("CREATE FUNCTION",))
+    report = provisioning.bootstrap(_fake_workspace_client(), settings)
+
+    assert report["ok"] is False
+    assert report["row_filtered"] == []
+    # Without the row-filter function, NO row filter is applied ...
+    assert not any("SET ROW FILTER" in stmt for stmt in recorded)
+    # ... and EVERY table's grantee access is withheld.
+    assert sorted(report["grants_withheld"]) == sorted(schema.ALL_TABLE_NAMES)
+    assert not any(
+        "GRANT SELECT, MODIFY ON TABLE" in stmt and settings.history_grantee in stmt
+        for stmt in recorded
+    )
 
 
 def test_catalog_inaccessible_returns_early_without_creating_anything(monkeypatch, settings):
