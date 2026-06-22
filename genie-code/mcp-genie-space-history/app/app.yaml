@@ -1,0 +1,34 @@
+# Databricks Apps manifest for the Genie Space History MCP server (spec §10).
+# App name must start with "mcp-" for AI Playground / Genie Code recognition.
+#
+# Deploy root is this `app/` directory: uvicorn resolves `server.app:app` against
+# it (the `server` package is on sys.path), and Apps installs `requirements.txt`.
+command:
+  - "sh"
+  - "-c"
+  - "uvicorn server.app:app --host 0.0.0.0 --port ${DATABRICKS_APP_PORT:-8000}"
+
+# OBO OAuth scopes (spec §5 / §12 #2, P0 finding F-6). A deployed app's OBO token
+# otherwise defaults to identity-only scopes and warehouse calls fail. This server
+# needs ONLY `sql` (it never calls the Genie API under Option A).
+user_api_scopes:
+  - sql
+
+env:
+  - name: HISTORY_CATALOG
+    value: "<pre-existing-catalog>"   # the app NEVER creates this; schema genie_space_history is auto-created inside it
+  - name: HISTORY_OWNER_GROUP
+    value: "<account-group>"          # durable OWNER of schema/tables (survives app/SP deletion)
+  - name: HISTORY_GRANTEE
+    value: "<user-group>"             # OBO users granted SELECT/MODIFY at bootstrap
+  - name: SQL_WAREHOUSE_ID
+    valueFrom: "sql-warehouse"        # bind a SQL-warehouse app resource (CAN USE)
+  - name: CORS_ALLOW_ORIGINS
+    value: "https://<workspace-host>"  # allow-list the workspace URL (spec §3)
+  # JSON columns default to STRING; flip to true ONLY after confirming VARIANT on the
+  # target warehouse (spec §7.1 / §12 #3). Never hard-required.
+  - name: HISTORY_USE_VARIANT
+    value: "false"
+  # OBO feature flag for graceful degradation where OBO isn't enabled yet (spec §5).
+  - name: OBO_ENABLED
+    value: "true"
