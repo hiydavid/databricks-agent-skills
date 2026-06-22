@@ -13,12 +13,13 @@ to equal the ``SESSION_USER()`` the ``only_mine`` row filter compares against
 (spec §5/§7.1) — i.e. a user can always read back their own writes.
 
 Concurrency note (spec §6/§11): UC SQL warehouses enforce **no** PK/unique
-constraints or row locks and give us no multi-statement transaction, so
-``save_config_snapshot`` cannot make ``MAX(version)+1 → INSERT`` atomic. We use a
-bounded **optimistic-retry**: insert, then verify there is no colliding version /
-duplicate id, and on a version collision back out our row and retry. A residual
-race window remains (see ``save_config_snapshot`` + README); it is documented, not
-silently ignored.
+constraints or row locks and give us no multi-statement transaction. Config
+snapshots therefore carry **no monotonic version counter** — there is nothing to
+contend on. A save is a single ``INSERT``; snapshots are ordered and identified by
+the server-stamped ``created_at`` timestamp plus the ``config_version_id`` primary
+key. Idempotency is preserved by deriving that id deterministically from the
+idempotency key (default: ``config_hash``) and reading-before-write, so a repeated
+key resolves to the existing row instead of inserting a duplicate.
 """
 
 from __future__ import annotations
@@ -30,11 +31,7 @@ from typing import Any, Optional, Sequence
 
 from . import schema
 from .config import Settings
-from .errors import StorageContentionError
 from .sql import Param, QueryResult, SqlExec, quote_ident
-
-# Bounded optimistic-retry budget for version allocation under concurrency.
-MAX_SAVE_ATTEMPTS = 5
 
 
 def sha256_hex(text: str) -> str:
@@ -139,21 +136,6 @@ class UCTableStore:
         return f"{self._fq_schema}.{quote_ident(table_name)}"
 
     # --- helpers -----------------------------------------------------------
-    def _next_version(self, space_id: str) -> int:
-        """Monotonic per-``space_id`` version (1, 2, 3…).
-
-        Under OBO + the ``only_mine`` row filter this counts only the caller's own
-        snapshots for the space (other users' rows are invisible) — the intended
-        per-user history semantics (spec §5).
-        """
-        sql = (
-            f"SELECT COALESCE(MAX(version), 0) + 1 AS next_version "
-            f"FROM {self._fq_table(schema.CONFIG_SNAPSHOTS)} WHERE space_id = :space_id"
-        )
-        result = self._run(sql, [Param("space_id", space_id)])
-        value = result.scalar()
-        return int(value) if value is not None else 1
-
     def _find_by_id(self, spec: schema.TableSpec, id_value: str) -> Optional[dict]:
         sql = (
             f"SELECT * FROM {self._fq_table(spec.name)} "
@@ -161,46 +143,11 @@ class UCTableStore:
         )
         return self._run(sql, [Param("id", id_value)]).first()
 
-    def _snapshot_conflicts(
-        self, space_id: str, config_version_id: str, version: int
-    ) -> list[dict]:
-        """Post-insert verification: rows sharing our id OR our version for this space.
-
-        Used to detect (a) a concurrent write that landed the same idempotency-derived
-        id and (b) a concurrent write that grabbed the same ``version`` with a *different*
-        config. Runs OBO, so it sees only the caller's own rows — but concurrent writes
-        for the same (space, user) are by the same identity, hence visible here.
-        """
-        sql = (
-            f"SELECT config_version_id, version, config_hash, etag "
-            f"FROM {self._fq_table(schema.CONFIG_SNAPSHOTS)} "
-            f"WHERE space_id = :space_id AND (config_version_id = :id OR version = :version)"
-        )
-        params = [
-            Param("space_id", space_id),
-            Param("id", config_version_id),
-            Param("version", str(version), "BIGINT"),
-        ]
-        return self._run(sql, params).dicts()
-
-    def _delete_snapshot(self, config_version_id: str, version: int) -> None:
-        """Back out exactly our just-inserted row (to resolve a version collision)."""
-        sql = (
-            f"DELETE FROM {self._fq_table(schema.CONFIG_SNAPSHOTS)} "
-            f"WHERE config_version_id = :id AND version = :version"
-        )
-        self._run(
-            sql,
-            [Param("id", config_version_id), Param("version", str(version), "BIGINT")],
-        )
-
     @staticmethod
     def _dedup_result(row: dict) -> dict:
         """Shape an existing config_snapshots row as a deduplicated save result."""
-        v = row.get("version")
         return {
             "config_version_id": row.get("config_version_id"),
-            "version": int(v) if v is not None else None,
             "config_hash": row.get("config_hash"),
             "etag": row.get("etag"),
             "deduplicated": True,
@@ -221,95 +168,52 @@ class UCTableStore:
         skill_name: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> dict:
-        """Persist a config version; returns ``{config_version_id, version, config_hash, etag}``.
+        """Persist a config snapshot; returns ``{config_version_id, config_hash, etag}``.
 
-        Server-computed: ``config_hash`` (sha256 of ``serialized_space``), a monotonic
-        per-space ``version``, and the logical id (deterministic from the idempotency
-        key — which defaults to ``config_hash``, so re-saving identical content is a
-        no-op that returns the existing row, spec §6).
+        Server-computed: ``config_hash`` (sha256 of ``serialized_space``) and the logical
+        id (deterministic from the idempotency key — which defaults to ``config_hash``, so
+        re-saving identical content is a no-op that returns the existing row, spec §6).
 
-        Concurrency (spec §11): UC has no unique constraints / row locks / cross-statement
-        transactions, so we run a bounded optimistic-retry — insert, then verify there is
-        no colliding version (different config, same version) or duplicate id; on a version
-        collision we back out our row and retry up to ``MAX_SAVE_ATTEMPTS``, raising a clean
-        :class:`StorageContentionError` if it cannot converge.
-
-        **Residual race (documented, not silently ignored):** two concurrent writes with the
-        *same idempotency key* can each pass read-before-write and land byte-identical rows;
-        a targeted DELETE can't distinguish them, so a transient duplicate may persist (the
-        logical result is still single + correct). Single-writer use — the normal skill
-        path — is unaffected. See the README "Concurrency" note.
+        There is **no monotonic version counter**: snapshots are ordered/identified by the
+        server-stamped ``created_at`` plus ``config_version_id`` (spec §6/§11). A save is a
+        single ``INSERT`` — no ``MAX(version)`` read, no post-insert reconciliation, nothing
+        to contend on. Idempotency is enforced by a read-before-write on the deterministic
+        id: a repeated key resolves to the existing row instead of inserting a duplicate.
         """
         config_hash = sha256_hex(serialized_space)
         idem = idempotency_key or config_hash
         config_version_id = _derive_id(f"config:{space_id}", idem)
         spec = schema.TABLE_SPECS[0]
 
-        for _attempt in range(MAX_SAVE_ATTEMPTS):
-            # 1) Idempotency read-before-write (re-checked every attempt: a concurrent
-            #    writer sharing this key may have committed since the previous try).
-            existing = self._find_by_id(spec, config_version_id)
-            if existing is not None:
-                return self._dedup_result(existing)
+        # Idempotency read-before-write: a repeated key (default: byte-identical content)
+        # resolves to the existing row rather than inserting a duplicate (spec §6).
+        existing = self._find_by_id(spec, config_version_id)
+        if existing is not None:
+            return self._dedup_result(existing)
 
-            # 2) Allocate a version and insert.
-            version = self._next_version(space_id)
-            b = _InsertBuilder()
-            b.set("config_version_id", config_version_id)
-            b.set("space_id", space_id)
-            b.set("version", version)
-            b.set("parent_version_id", parent_version_id)
-            b.set_raw("created_at", "current_timestamp()")
-            b.set_raw("created_by", "current_user()")
-            b.set("skill_name", skill_name)
-            b.set_json("config_json", serialized_space, use_variant=self.settings.use_variant)
-            b.set("config_hash", config_hash)
-            b.set_array("changed_surfaces", changed_surfaces)
-            b.set("etag", etag)
-            b.set("run_id", run_id)
-            b.set("rollback_reference", rollback_reference)
-            b.set("change_summary", change_summary)
-            sql, params = b.build(self._fq_table(schema.CONFIG_SNAPSHOTS))
-            self._run(sql, params)
+        b = _InsertBuilder()
+        b.set("config_version_id", config_version_id)
+        b.set("space_id", space_id)
+        b.set("parent_version_id", parent_version_id)
+        b.set_raw("created_at", "current_timestamp()")
+        b.set_raw("created_by", "current_user()")
+        b.set("skill_name", skill_name)
+        b.set_json("config_json", serialized_space, use_variant=self.settings.use_variant)
+        b.set("config_hash", config_hash)
+        b.set_array("changed_surfaces", changed_surfaces)
+        b.set("etag", etag)
+        b.set("run_id", run_id)
+        b.set("rollback_reference", rollback_reference)
+        b.set("change_summary", change_summary)
+        sql, params = b.build(self._fq_table(schema.CONFIG_SNAPSHOTS))
+        self._run(sql, params)
 
-            # 3) Post-insert verification.
-            conflicts = self._snapshot_conflicts(space_id, config_version_id, version)
-            same_id = [r for r in conflicts if r.get("config_version_id") == config_version_id]
-            other_same_version = [
-                r
-                for r in conflicts
-                if r.get("config_version_id") != config_version_id
-                and r.get("version") is not None
-                and int(r["version"]) == version
-            ]
-
-            if len(same_id) > 1:
-                # Concurrent same-key insert (the documented residual): keep one logical
-                # result. Identical rows can't be told apart for a targeted DELETE.
-                return self._dedup_result(same_id[0])
-
-            if other_same_version:
-                # A different config grabbed our version concurrently. Deterministic
-                # tie-break: the larger config_version_id yields (backs out + retries);
-                # the smaller keeps its row. Exactly one writer yields, guaranteeing
-                # forward progress.
-                other_max = max(r["config_version_id"] for r in other_same_version)
-                if config_version_id > other_max:
-                    self._delete_snapshot(config_version_id, version)
-                    continue
-
-            return {
-                "config_version_id": config_version_id,
-                "version": version,
-                "config_hash": config_hash,
-                "etag": etag,
-                "deduplicated": False,
-            }
-
-        raise StorageContentionError(
-            f"could not allocate a unique config version for space {space_id!r} after "
-            f"{MAX_SAVE_ATTEMPTS} attempts (high write contention); please retry."
-        )
+        return {
+            "config_version_id": config_version_id,
+            "config_hash": config_hash,
+            "etag": etag,
+            "deduplicated": False,
+        }
 
     # --- save_report -------------------------------------------------------
     def save_report(
@@ -374,10 +278,15 @@ class UCTableStore:
     ) -> list[dict]:
         """UNION across the artifact tables for a space → normalized timeline rows.
 
-        Each row: ``{id, type, version, created_at, created_by, summary, decision}``.
+        Each row: ``{id, type, version, created_at, created_by, summary, decision}``
+        (``version`` is always NULL — config snapshots no longer carry a counter).
         ``type_label`` (optional) restricts to a single artifact type; ``since``
         filters on ``created_at``. ``limit`` is a server-validated integer, so it
         is inlined safely (parameter markers are not supported in LIMIT).
+
+        Ordering is ``created_at DESC`` (newest first) with ``id`` as a stable
+        secondary tiebreaker, so pagination / ``since`` stay deterministic even when
+        two rows share a timestamp (spec §6).
         """
         specs: Sequence[schema.TableSpec]
         specs = [schema.TYPE_LABEL_TO_SPEC[type_label]] if type_label else schema.TABLE_SPECS
@@ -403,7 +312,7 @@ class UCTableStore:
 
         safe_limit = max(1, min(int(limit), 1000))
         union = "\nUNION ALL\n".join(subqueries)
-        sql = f"SELECT * FROM (\n{union}\n) ORDER BY created_at DESC LIMIT {safe_limit}"
+        sql = f"SELECT * FROM (\n{union}\n) ORDER BY created_at DESC, id ASC LIMIT {safe_limit}"
         return self._run(sql, params).dicts()
 
     # --- get_artifact ------------------------------------------------------

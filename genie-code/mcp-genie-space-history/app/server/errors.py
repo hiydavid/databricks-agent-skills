@@ -20,16 +20,6 @@ class ToolValidationError(ValueError):
     """An input failed validation against the §7 field contracts."""
 
 
-class StorageContentionError(RuntimeError):
-    """A write could not converge under concurrency (e.g. version allocation).
-
-    UC SQL warehouses enforce no PK/unique constraints or row locks, so writes use
-    a bounded optimistic-retry (see :mod:`server.store`). When that retry budget is
-    exhausted the tool surfaces this as a clean ``contention`` error rather than
-    leaving a duplicate/colliding row.
-    """
-
-
 class OBOScopeError(RuntimeError):
     """The OBO token is absent / OBO is disabled / a required scope is missing.
 

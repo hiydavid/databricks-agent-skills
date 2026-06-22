@@ -46,6 +46,20 @@ def test_list_history_filter_restricts_to_one_table(store, backend):
     assert schema.QUERY_REPORTS not in list_sql
 
 
+def test_list_history_orders_newest_first_by_created_at(store, backend):
+    # Two config snapshots that differ only by created_at — newest must come first,
+    # with the artifact id as a stable secondary tiebreaker (deterministic pagination).
+    newest = ["id-new", "config_snapshot", None, "2026-01-02T00:00:00Z", "alice", "v2", None]
+    oldest = ["id-old", "config_snapshot", None, "2026-01-01T00:00:00Z", "alice", "v1", None]
+    backend.list_result = QueryResult(_LIST_COLUMNS, [newest, oldest])
+
+    result = list_history_core(store, space_id="s1")
+    assert [row["id"] for row in result["items"]] == ["id-new", "id-old"]
+
+    list_sql, _params = backend.calls[-1]
+    assert "ORDER BY created_at DESC, id ASC" in list_sql
+
+
 def test_list_history_since_binds_param(store, backend):
     backend.list_result = QueryResult(_LIST_COLUMNS, [])
     list_history_core(store, space_id="s1", since="2026-01-01T00:00:00Z")

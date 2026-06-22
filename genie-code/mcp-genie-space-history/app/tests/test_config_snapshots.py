@@ -1,4 +1,8 @@
-"""save_config_snapshot: version monotonicity, config_hash, lineage, idempotency."""
+"""save_config_snapshot: single-INSERT persistence, config_hash, lineage, idempotency.
+
+There is no monotonic version counter: each save is one INSERT, and snapshots are
+ordered/identified by ``created_at`` + ``config_version_id`` (B1 resolution).
+"""
 
 from __future__ import annotations
 
@@ -7,9 +11,7 @@ import hashlib
 import pytest
 
 from server import schema
-from server import store as store_module
-from server.errors import StorageContentionError, ToolValidationError
-from server.store import MAX_SAVE_ATTEMPTS
+from server.errors import ToolValidationError
 from server.tools import save_config_snapshot_core
 
 from .conftest import param_value
@@ -19,21 +21,36 @@ def _config_inserts(backend):
     return backend.inserts_into(schema.CONFIG_SNAPSHOTS)
 
 
-def _cvid(space_id: str, serialized: str, idempotency_key: str | None = None) -> str:
-    """Recompute the deterministic config_version_id the store will derive."""
-    idem = idempotency_key or store_module.sha256_hex(serialized)
-    return store_module._derive_id(f"config:{space_id}", idem)
+def test_save_returns_no_version_field(store):
+    result = save_config_snapshot_core(store, space_id="s1", serialized_space='{"v":1}')
+    # The monotonic version concept is gone entirely — the result no longer carries it.
+    assert "version" not in result
+    assert result["ok"] is True
+    assert result["deduplicated"] is False
 
 
-def test_version_is_monotonic_per_space(store, backend):
+def test_save_is_a_single_insert_with_no_version_machinery(store, backend):
+    save_config_snapshot_core(store, space_id="s1", serialized_space='{"v":1}')
+    # One INSERT, no MAX(version) read, no post-insert reconciliation query, no DELETE.
+    assert len(_config_inserts(backend)) == 1
+    assert not any("MAX(version)" in sql for sql, _ in backend.calls)
+    assert not any(sql.lstrip().startswith("DELETE") for sql, _ in backend.calls)
+    # No version column is bound on the INSERT.
+    _sql, params = _config_inserts(backend)[-1]
+    assert param_value(params, "version") is None
+
+
+def test_two_rapid_snapshots_persist_as_distinct_rows(store, backend):
+    """Two successive snapshots for the same space (distinct content) both persist."""
     r1 = save_config_snapshot_core(store, space_id="s1", serialized_space='{"v":1}')
     r2 = save_config_snapshot_core(store, space_id="s1", serialized_space='{"v":2}')
-    r3 = save_config_snapshot_core(store, space_id="s1", serialized_space='{"v":3}')
-    assert [r1["version"], r2["version"], r3["version"]] == [1, 2, 3]
 
-    # A different space restarts its own counter at 1.
-    other = save_config_snapshot_core(store, space_id="s2", serialized_space='{"v":1}')
-    assert other["version"] == 1
+    assert r1["deduplicated"] is False
+    assert r2["deduplicated"] is False
+    assert r1["config_version_id"] != r2["config_version_id"]
+    # Each save is exactly one INSERT; both rows survive as distinct rows.
+    assert len(_config_inserts(backend)) == 2
+    assert len(backend.rows[schema.CONFIG_SNAPSHOTS]) == 2
 
 
 def test_config_hash_is_sha256_of_serialized_space(store):
@@ -43,7 +60,8 @@ def test_config_hash_is_sha256_of_serialized_space(store):
     assert result["config_hash"] == expected
 
 
-def test_lineage_parent_version_id_is_persisted(store, backend):
+def test_lineage_parent_reference_is_keyed_on_config_version_id(store, backend):
+    """Lineage points at the artifact id (config_version_id), never a version number."""
     r1 = save_config_snapshot_core(store, space_id="s1", serialized_space='{"v":1}')
     save_config_snapshot_core(
         store,
@@ -67,7 +85,8 @@ def test_created_by_is_server_side_current_user(store, backend):
 def test_created_at_is_server_side(store, backend):
     save_config_snapshot_core(store, space_id="s1", serialized_space='{"v":1}')
     sql, params = _config_inserts(backend)[-1]
-    # created_at uses current_timestamp() (no bound param) so it's server-stamped.
+    # created_at uses current_timestamp() (no bound param) so it's server-stamped — it is
+    # the ordering/identity key now that there is no version counter.
     assert "current_timestamp()" in sql
     assert param_value(params, "created_at") is None
 
@@ -100,8 +119,7 @@ def test_idempotency_default_dedupes_identical_config(store, backend):
 
     assert r2["deduplicated"] is True
     assert r2["config_version_id"] == r1["config_version_id"]
-    assert r2["version"] == r1["version"]
-    # The retry must NOT insert a second row.
+    # The repeat must NOT insert a second row.
     assert len(_config_inserts(backend)) == 1
 
 
@@ -143,80 +161,3 @@ def test_missing_required_inputs_rejected(store):
         save_config_snapshot_core(store, space_id="", serialized_space='{"v":1}')
     with pytest.raises(ToolValidationError):
         save_config_snapshot_core(store, space_id="s1", serialized_space="")
-
-
-# --- B1: version-allocation race / optimistic-retry ------------------------
-def test_version_collision_backs_out_and_retries(store, backend):
-    """A concurrent different-config writer grabs our version; the larger-id writer
-    backs out its row (DELETE) and retries, converging on a unique version."""
-    serialized = '{"v":1}'
-    cvid = _cvid("s1", serialized)
-    # Phantom shares version 1 but has a SMALLER id -> our writer yields (deletes+retries).
-    backend.pending_conflict = {
-        "config_version_id": cvid[:-1],
-        "version": 1,
-        "config_hash": "other-config",
-        "etag": None,
-    }
-
-    result = save_config_snapshot_core(store, space_id="s1", serialized_space=serialized)
-
-    assert result["deduplicated"] is False
-    assert result["config_version_id"] == cvid
-    assert result["version"] == 1  # recomputed after backing out
-    assert len(backend.deletes()) == 1  # backed out exactly once
-    assert len(_config_inserts(backend)) == 2  # first attempt + retry
-    assert len(backend.rows[schema.CONFIG_SNAPSHOTS]) == 1  # one row survives
-
-
-def test_version_collision_winner_keeps_its_row(store, backend):
-    """When our id is the smaller one in a collision, we keep our row (no retry/delete)."""
-    serialized = '{"v":1}'
-    cvid = _cvid("s1", serialized)
-    backend.pending_conflict = {
-        "config_version_id": cvid + "0",  # larger id -> the OTHER writer yields
-        "version": 1,
-        "config_hash": "other-config",
-        "etag": None,
-    }
-
-    result = save_config_snapshot_core(store, space_id="s1", serialized_space=serialized)
-
-    assert result["deduplicated"] is False
-    assert result["version"] == 1
-    assert backend.deletes() == []
-    assert len(_config_inserts(backend)) == 1
-
-
-def test_unresolvable_contention_raises_clean_error(store, backend):
-    """If every attempt collides (persistent contention), surface a clean error rather
-    than leaving a colliding row."""
-    serialized = '{"v":1}'
-    cvid = _cvid("s1", serialized)
-    backend.persistent_conflict = {
-        "config_version_id": cvid[:-1],  # always smaller -> we always yield
-        "version": 1,
-        "config_hash": "other-config",
-        "etag": None,
-    }
-
-    with pytest.raises(StorageContentionError):
-        save_config_snapshot_core(store, space_id="s1", serialized_space=serialized)
-
-    assert len(_config_inserts(backend)) == MAX_SAVE_ATTEMPTS
-    assert len(backend.deletes()) == MAX_SAVE_ATTEMPTS
-    assert backend.rows[schema.CONFIG_SNAPSHOTS] == {}  # nothing left behind
-
-
-def test_concurrent_same_key_returns_single_logical_result(store, backend):
-    """A concurrent insert sharing the idempotency key is detected post-insert and
-    collapsed to one logical (deduplicated) result (documented residual)."""
-    serialized = '{"v":1}'
-    cvid = _cvid("s1", serialized)
-    backend.inject_dup_id = True
-
-    result = save_config_snapshot_core(store, space_id="s1", serialized_space=serialized)
-
-    assert result["deduplicated"] is True
-    assert result["config_version_id"] == cvid
-    assert len(backend.deletes()) == 0  # identical rows can't be safely targeted

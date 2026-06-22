@@ -22,7 +22,6 @@ from . import auth, schema
 from .config import Settings
 from .errors import (
     OBOScopeError,
-    StorageContentionError,
     ToolValidationError,
     error_payload,
     looks_like_scope_error,
@@ -206,9 +205,6 @@ def _run_tool(settings: Settings, tool_name: str, core: Callable[[UCTableStore],
     except ToolValidationError as exc:
         logger.info("tool=%s validation_error: %s", tool_name, exc)
         return validation_error_payload(str(exc))
-    except StorageContentionError as exc:
-        logger.warning("tool=%s contention: %s", tool_name, exc)
-        return error_payload("contention", str(exc))
     except SqlError as exc:
         if looks_like_scope_error(exc):
             logger.warning("tool=%s scope_error (sql): %s", tool_name, exc)
@@ -241,12 +237,13 @@ def register_tools(mcp_server, settings: Settings) -> None:
         skill_name: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> dict:
-        """Persist a Genie Space config version (the mandatory before/after snapshot).
+        """Persist a Genie Space config snapshot (the mandatory before/after snapshot).
 
         The caller supplies ``serialized_space`` — the MCP never fetches it. The server
-        computes a monotonic per-space ``version``, a sha256 ``config_hash``, stores the
-        caller's ``etag`` verbatim, and sets lineage via ``parent_config_version_id``.
-        Returns ``{config_version_id, version, config_hash, etag}``. (Writes config_snapshots.)
+        computes a sha256 ``config_hash``, stores the caller's ``etag`` verbatim, and sets
+        lineage via ``parent_config_version_id``. Snapshots are ordered/identified by
+        ``created_at`` + ``config_version_id`` (no monotonic version counter). Returns
+        ``{config_version_id, config_hash, etag}``. (Writes config_snapshots.)
         """
         return _run_tool(
             settings,

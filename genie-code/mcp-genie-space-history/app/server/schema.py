@@ -72,7 +72,9 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
         name=CONFIG_SNAPSHOTS,
         id_column="config_version_id",
         type_label="config_snapshot",
-        version_expr="version",
+        # No monotonic version counter: config snapshots are ordered/identified by
+        # created_at + config_version_id, so this projects NULL like every other table.
+        version_expr="CAST(NULL AS BIGINT)",
         summary_expr="change_summary",
         decision_expr="CAST(NULL AS STRING)",
     ),
@@ -145,7 +147,6 @@ def config_snapshots_ddl(fq: str, *, use_variant: bool) -> str:
 CREATE TABLE IF NOT EXISTS {fq}.{CONFIG_SNAPSHOTS} (
   config_version_id   STRING    NOT NULL,
   space_id            STRING    NOT NULL,
-  version             BIGINT    NOT NULL,
   parent_version_id   STRING,
   created_at          TIMESTAMP DEFAULT current_timestamp(),
   created_by          STRING    DEFAULT current_user(),

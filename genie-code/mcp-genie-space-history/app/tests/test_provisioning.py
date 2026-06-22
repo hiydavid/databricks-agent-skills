@@ -86,6 +86,22 @@ def test_bootstrap_required_tblproperties_present(monkeypatch, settings):
         assert "'delta.feature.allowColumnDefaults' = 'supported'" in ddl
 
 
+def test_fresh_config_snapshots_table_has_no_version_column(monkeypatch, settings):
+    recorded = _install_fake_exec(monkeypatch)
+    provisioning.bootstrap(_fake_workspace_client(), settings)
+
+    create = next(
+        s for s in recorded if "CREATE TABLE IF NOT EXISTS" in s and schema.CONFIG_SNAPSHOTS in s
+    )
+    # The monotonic version counter is gone — a fresh table has no bare ``version`` column
+    # (config_version_id / parent_version_id remain; they hold ids, not a counter).
+    column_lines = [ln.strip() for ln in create.splitlines()]
+    assert not any(ln.startswith("version ") for ln in column_lines)
+    # The identity/ordering columns remain.
+    assert "config_version_id" in create
+    assert "created_at" in create
+
+
 def test_ownership_failure_is_warning_not_crash(monkeypatch, settings):
     _install_fake_exec(monkeypatch, fail_substrings=("OWNER TO",))
     report = provisioning.bootstrap(_fake_workspace_client(), settings)

@@ -15,7 +15,7 @@ Four MCP tools (spec §6), all running **On-Behalf-Of-User (OBO)**:
 
 | Tool | Purpose | Writes |
 | --- | --- | --- |
-| `save_config_snapshot` | Persist a Space config version (the rollback-critical snapshot). Server computes a monotonic per-`space_id` `version`, a sha256 `config_hash`, stores the caller's `etag` verbatim, sets lineage via `parent_config_version_id`. | `config_snapshots` |
+| `save_config_snapshot` | Persist a Space config snapshot (the rollback-critical snapshot). Server computes a sha256 `config_hash`, stores the caller's `etag` verbatim, sets lineage via `parent_config_version_id`. Snapshots are ordered/identified by `created_at` + `config_version_id` (no monotonic version counter). | `config_snapshots` |
 | `save_report` | Persist a Markdown artifact, routed by `artifact_type` (`diagnose_report` / `query_report` / `design_proposal` / `metric_view_ddl`); unknown types rejected; `redacted` defaults to `true`. | the routed report table |
 | `list_history` | Timeline for a Space — UNION across all artifact tables; optional `artifact_type` / `since` filters. | — |
 | `get_artifact` | Resolve a `config_version_id` / `artifact_id` / `run_id` across all tables and return the full record. | — |
@@ -33,7 +33,7 @@ server/
 ├── schema.py        # DDL for the 7 tables + only_mine row-filter function (spec §7.1)
 ├── auth.py          # OBO (per-request user) vs app-SP WorkspaceClient builders (spec §5)
 ├── provisioning.py  # idempotent startup bootstrap: schema/tables/filter/ownership/grants
-├── store.py         # UCTableStore — server-side bound params, versioning, dedupe, list/get
+├── store.py         # UCTableStore — server-side bound params, idempotent dedupe, list/get
 ├── tools.py         # the four P1 MCP tools + OBO/error wrapping
 ├── app.py           # FastAPI + FastMCP mount at /mcp, CORS, OBO middleware, lifespan bootstrap
 └── main.py          # uvicorn entrypoint (binds DATABRICKS_APP_PORT)
@@ -90,25 +90,22 @@ confirm OBO is enabled in the Previews portal.
 ## Concurrency & idempotency (spec §6/§11)
 
 UC SQL warehouses enforce **no** PK/unique constraints or row locks, and give the app
-no multi-statement transaction. `save_config_snapshot` therefore cannot make
-`MAX(version)+1 → INSERT` atomic. It uses a bounded **optimistic-retry**:
+no multi-statement transaction. Rather than fight that, `save_config_snapshot` carries
+**no monotonic version counter** — there is nothing to contend on:
 
-1. **Idempotency** — the logical id is derived deterministically from the idempotency
-   key (which defaults to `config_hash`). A read-before-write returns the existing row
-   on a repeat key, so a sequential retry never inserts a second row.
-2. **Version monotonicity** — after inserting, the write verifies no *other* config
-   grabbed the same `version`. On a collision the writers tie-break by id (the larger id
-   backs out its row via `DELETE` and retries with a freshly computed version); after
-   `MAX_SAVE_ATTEMPTS` it surfaces a clean `contention` error rather than leaving a
-   colliding row.
+- **Ordering & identity** come from the server-stamped `created_at` plus the
+  `config_version_id` primary key. `list_history` orders `created_at DESC` with `id` as a
+  stable secondary tiebreaker, so pagination / `since` stay deterministic even when two
+  rows share a timestamp.
+- **A save is a single `INSERT`** — no `MAX(version)` read, no post-insert reconciliation,
+  no back-out `DELETE`. Two rapid snapshots for the same space simply land as two distinct
+  rows.
+- **Idempotency** — the logical id is derived deterministically from the idempotency key
+  (which defaults to `config_hash`). A read-before-write returns the existing row on a
+  repeat key, so a retried save never inserts a second row.
 
-**Residual race (documented, not silently ignored):** two writes issued *simultaneously*
-with the **same idempotency key** can each pass read-before-write and land byte-identical
-rows; a targeted `DELETE` can't distinguish them, so a transient duplicate may persist —
-the logical result returned is still single and correct. The normal skill path is a
-single writer per `(space, user)` and is unaffected. A fully race-free guarantee is not
-achievable on UC SQL-warehouse semantics in P1; closing it would need a serializing
-mechanism (e.g. a Lakebase/transactional sequence) — out of P1 scope.
+Dropping the counter removes the version-allocation race (and its false uniqueness
+guarantee) by construction (cross-review B1).
 
 ## Dev inner loop
 
