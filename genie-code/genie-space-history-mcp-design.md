@@ -14,14 +14,14 @@
 The `genie-code/` skill suite (`create-genie-space`, `create-metric-view`, `diagnose-genie-space`, `optimize-genie-space`, `optimize-genie-query`) produces valuable artifacts but has **no durable, queryable, service-backed history**:
 
 - **`diagnose-genie-space`** is plan-only and emits a Markdown *Diagnostic Write-Up* to chat/notebook — **persisted nowhere**.
-- **`optimize-genie-space`** is the only skill that edits a Space. It *already mandates* capturing a "rollback-ready before snapshot in the approved local workspace history folder" and defines a detailed recommended file layout in `optimize-genie-space/references/optimization-guide.md` (`runs/`, `config_versions/`, `eval_results/`, `repair_analysis/`, `events.jsonl`). **But nothing enforces, indexes, queries, or actually performs a rollback** — it's hand-written files with a manual revert.
+- **`optimize-genie-space`** is the only skill that edits a Space. It *already mandates* capturing a "rollback-ready before snapshot in the approved local workspace history folder" and defines a detailed recommended file layout in `optimize-genie-space/references/persistence.md` (`runs/`, `config_versions/`, `eval_results/`, `repair_analysis/`, `events.jsonl`). **But nothing enforces, indexes, queries, or actually performs a rollback** — it's hand-written files with a manual revert.
 - **`optimize-genie-query`** emits a Markdown report — **persisted nowhere**.
 - **`create-genie-space`** / **`create-metric-view`** emit a design proposal / YAML+DDL — **no snapshot/versioning**.
 - **No skill defines a machine-readable Genie Space config object**; config read/write is delegated entirely to Genie Code's native editor/tools.
 
 **The gap this server fills:** turn the skills' ad-hoc local files into a governed service that gives users (1) a **history** of every config change and analysis, (2) the ability to **diff** versions, and (3) the durable, queryable **snapshots that let Genie Code roll back** a Genie Space config to a prior version (the MCP stores and serves them; Genie Code performs the re-apply).
 
-The skill's own recommended schema in `optimization-guide.md` is the **contract we build against** — the MCP server is the durable backend for a layout the skills already know how to produce.
+The skill's own recommended schema in `persistence.md` is the **contract we build against** — the MCP server is the durable backend for a layout the skills already know how to produce.
 
 ---
 
@@ -174,7 +174,7 @@ These facts (from the investigation) directly constrain the design. Confidence +
 
 ## 7. Data model
 
-The schema **deliberately aligns with `optimize-genie-space/references/optimization-guide.md`** so the skill's existing field definitions and the service speak the same shape. **Unity Catalog Delta tables are the sole backend** — separate tables per artifact type, no workspace-file mirror (see §7.2 for the rationale).
+The schema **deliberately aligns with `optimize-genie-space/references/persistence.md`** so the skill's existing field definitions and the service speak the same shape. **Unity Catalog Delta tables are the sole backend** — separate tables per artifact type, no workspace-file mirror (see §7.2 for the rationale).
 
 ### 7.1 UC Delta tables (system-of-record)
 
@@ -304,7 +304,7 @@ Consequence for the skill: the `optimize-genie-space` skill currently writes tha
 
 ### 7.3 Privacy / data minimization
 
-Carry over the skill's rules (`optimization-guide.md`): store hashes/digests/row-counts/summaries by default; store raw SQL/result samples only when needed to reproduce a decision; **redact sensitive literals** in questions, SQL, judge notes, errors, and config text. The server enforces a `redact=true` default on report payloads.
+Carry over the skill's rules (`persistence.md`): store hashes/digests/row-counts/summaries by default; store raw SQL/result samples only when needed to reproduce a decision; **redact sensitive literals** in questions, SQL, judge notes, errors, and config text. The server enforces a `redact=true` default on report payloads.
 
 ---
 
@@ -348,7 +348,7 @@ Docs (for Genie Code's apply path, not the MCP): SDK `w.genie.update_space` / `g
 | `create-metric-view`   | `save_report(artifact_type="metric_view_ddl")`                                                                                         | Snapshot the approved YAML/DDL for change history.                                                                    |
 
 
-Integration is **opt-in and additive**: skills detect the MCP server's tools and use them when present. **Decision (option B):** `optimize-genie-space` **keeps** its current local workspace-file layout strictly as the *no-MCP fallback*, so the mandatory pre-edit rollback snapshot still happens when the server isn't connected; the MCP is the durable, queryable, governed *upgrade* used when connected. `optimization-guide.md`'s field schema is **retained as the shared contract** the UC table mirrors. **This skill edit is the final phase of the plan (P5), sequenced after the server-build phases (P0–P4)** — see §13, “P5 — Skill reconciliation”; the skills are not touched until the tools exist and the server is deployable, and it is a docs-only change. (The short `SKILL.md` notes pointing at the tools are part of that same phase — a docs change.)
+Integration is **opt-in and additive**: skills detect the MCP server's tools and use them when present. **Decision (option B):** `optimize-genie-space` **keeps** its current local workspace-file layout strictly as the *no-MCP fallback*, so the mandatory pre-edit rollback snapshot still happens when the server isn't connected; the MCP is the durable, queryable, governed *upgrade* used when connected. `persistence.md`'s field schema is **retained as the shared contract** the UC table mirrors. **This skill edit is the final phase of the plan (P5), sequenced after the server-build phases (P0–P4)** — see §13, “P5 — Skill reconciliation”; the skills are not touched until the tools exist and the server is deployable, and it is a docs-only change. (The short `SKILL.md` notes pointing at the tools are part of that same phase — a docs change.)
 
 ---
 
@@ -437,10 +437,10 @@ Integration is **opt-in and additive**: skills detect the MCP server's tools and
   - [ ] **Parameterized config.** Operator sets only `HISTORY_CATALOG`, `HISTORY_OWNER_GROUP`, `HISTORY_GRANTEE`, and the SQL warehouse; everything else (fixed schema name `genie_space_history`, the §7.1 DDL, the `only_mine` row filter) is auto-created/fixed. Document the required `user_api_scopes: sql` and the OBO degradation feature flag (§5).
   - [ ] **Quickstart + operator runbook** for the human-only prerequisites the app cannot self-grant: grant the app SP `USE CATALOG` + `CREATE SCHEMA` on `HISTORY_CATALOG`; create/join `HISTORY_OWNER_GROUP` (or have a metastore admin run the one-time `OWNER TO` for the schema/tables/function); confirm OBO is enabled in the Previews portal; and the Genie Code **"Add Server"** UI step (still the one untested manual step per the P0 outcome above).
   - [ ] **CI + release.** Python test / lint / typecheck; pinned `requirements`; tagged versions. Keep `VARIANT` **opt-in / `STRING` default** so the package never hard-requires a Preview feature (§7.1 / §12 #3).
-  - [ ] **Schema-contract versioning.** Version the §7.1 schema as the shared contract with `optimize-genie-space/references/optimization-guide.md`; if the server is extracted to its own repo, **vendor or publish** the schema so the two sides cannot silently drift (see "Repository strategy").
+  - [ ] **Schema-contract versioning.** Version the §7.1 schema as the shared contract with `optimize-genie-space/references/persistence.md`; if the server is extracted to its own repo, **vendor or publish** the schema so the two sides cannot silently drift (see "Repository strategy").
 - **P5 — Skill reconciliation (docs-only — the final phase).** Fold the `genie-code/` skills onto the history MCP. This is **part of the plan, sequenced last** — done only after the tools exist and the server is deployable (P1–P4) so the skill text points at tools that already ship; it is a **docs / prose change, no code**. **Decision: option B** — keep the skills' local workspace-file persistence as the *no-MCP fallback* (never removed), so the mandatory pre-edit rollback snapshot still happens when the server isn't connected; the MCP is the governed upgrade used when connected. Tasks:
   - [ ] `optimize-genie-space/SKILL.md` — reframe persistence to an order of preference: **(1)** if the history MCP is connected, capture snapshots / record runs via its tools and retrieve the rollback target via `get_artifact` (the **skill** still applies the restore itself); **(2)** otherwise fall back to the local workspace-file layout (current behavior). Keep the *mandatory pre-edit snapshot* guarantee intact under **both** paths.
-  - [ ] `optimize-genie-space/references/optimization-guide.md` — **retain the field schema** (the shared contract the UC table mirrors); relabel the file layout as the *fallback* store, not the primary; add a short “History MCP” subsection describing the tool-based path.
+  - [ ] `optimize-genie-space/references/persistence.md` — **retain the field schema** (the shared contract the UC table mirrors); relabel the file layout as the *fallback* store, not the primary; add a short “History MCP” subsection describing the tool-based path.
   - [ ] `diagnose-genie-space/SKILL.md` and `optimize-genie-query/SKILL.md` — add a one-line note that the write-up / report can be persisted via `save_report` when the MCP is connected.
   - [ ] Do **not** delete any schema definitions — “removing persistence” (option A) was rejected; fallback writing stays.
 
@@ -448,7 +448,7 @@ Integration is **opt-in and additive**: skills detect the MCP server's tools and
 
 ### Repository strategy (where this server lives)
 
-The server currently lives **inside `databricks-agent-skills`** at `genie-code/mcp-genie-space-history/` (the P0 spike subtree, already self-contained with its own `pyproject.toml` / `requirements.txt` / `app.yaml`). That is the right home **through P1–P2**: the §7.1 schema is the shared contract mirrored from `optimize-genie-space/references/optimization-guide.md`, so co-location keeps the backend and that contract evolving together, and the spike already lives there.
+The server currently lives **inside `databricks-agent-skills`** at `genie-code/mcp-genie-space-history/` (the P0 spike subtree, already self-contained with its own `pyproject.toml` / `requirements.txt` / `app.yaml`). That is the right home **through P1–P2**: the §7.1 schema is the shared contract mirrored from `optimize-genie-space/references/persistence.md`, so co-location keeps the backend and that contract evolving together, and the spike already lives there.
 
 **Decision: re-evaluate extraction at the P4 packaging gate, and lean toward a separate repo if the audience is external / customer self-deployers.** Rationale:
 
