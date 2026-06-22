@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from . import schema
 from .config import Settings
@@ -267,6 +267,101 @@ class UCTableStore:
         self._run(sql, params)
         return {"artifact_id": artifact_id, "deduplicated": False}
 
+    # --- record_optimization_run ------------------------------------------
+    def record_optimization_run(
+        self,
+        *,
+        space_id: str,
+        run_id: str,
+        eval_results: Sequence[Mapping[str, Any]] = (),
+        baseline_score: Optional[float] = None,
+        candidate_score: Optional[float] = None,
+        score_delta: Optional[float] = None,
+        fixed_count: Optional[int] = None,
+        regressed_count: Optional[int] = None,
+        unchanged_count: Optional[int] = None,
+        excluded_count: Optional[int] = None,
+        decision: Optional[str] = None,
+        parent_config_version_id: Optional[str] = None,
+        result_config_version_id: Optional[str] = None,
+        change_summary: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> dict:
+        """Persist one ``optimization_runs`` row + N ``eval_results`` rows (FK ``run_id``).
+
+        Returns ``{run_id, eval_count, deduplicated}``. The stored ``run_id`` is derived
+        deterministically from the idempotency key (default: the caller's ``run_id``), so a
+        retried record resolves to the existing run instead of inserting a duplicate — the
+        same read-before-write pattern as ``save_config_snapshot``/``save_report`` (spec §6).
+        On a dedupe hit the eval rows are **not** re-inserted.
+
+        Each ``eval_results`` entry gets a stable ``eval_run_id`` derived from the run id +
+        its position, and inherits the run's ``space_id``; ``created_at``/``created_by`` are
+        stamped server-side on every row (spec §6/§7.1).
+        """
+        idem = idempotency_key or run_id
+        run_row_id = _derive_id(f"run:{space_id}", idem)
+        spec = next(s for s in schema.TABLE_SPECS if s.name == schema.OPTIMIZATION_RUNS)
+
+        # Idempotency read-before-write: a repeated key resolves to the existing run row
+        # rather than inserting a duplicate run (and its eval rows again) (spec §6).
+        existing = self._find_by_id(spec, run_row_id)
+        if existing is not None:
+            return {
+                "run_id": existing.get("run_id"),
+                "eval_count": len(eval_results),
+                "deduplicated": True,
+            }
+
+        b = _InsertBuilder()
+        b.set("run_id", run_row_id)
+        b.set("space_id", space_id)
+        b.set_raw("created_at", "current_timestamp()")
+        b.set_raw("created_by", "current_user()")
+        b.set("baseline_score", baseline_score)
+        b.set("candidate_score", candidate_score)
+        b.set("score_delta", score_delta)
+        b.set("fixed_count", fixed_count)
+        b.set("regressed_count", regressed_count)
+        b.set("unchanged_count", unchanged_count)
+        b.set("excluded_count", excluded_count)
+        b.set("decision", decision)
+        b.set("parent_config_version_id", parent_config_version_id)
+        b.set("result_config_version_id", result_config_version_id)
+        b.set("change_summary", change_summary)
+        sql, params = b.build(self._fq_table(schema.OPTIMIZATION_RUNS))
+        self._run(sql, params)
+
+        for index, entry in enumerate(eval_results):
+            self._insert_eval_result(run_row_id, space_id, index, entry)
+
+        return {"run_id": run_row_id, "eval_count": len(eval_results), "deduplicated": False}
+
+    def _insert_eval_result(
+        self, run_id: str, space_id: str, index: int, entry: Mapping[str, Any]
+    ) -> None:
+        """Insert one ``eval_results`` row (FK ``run_id``) for an already-validated entry."""
+        question_id = entry.get("question_id")
+        # Stable per-row PK: same (run, position) always yields the same id, so a row is
+        # never silently duplicated even if the loop re-runs (spec §7.1).
+        eval_run_id = _derive_id(f"eval:{run_id}", f"{index}:{question_id or ''}")
+        b = _InsertBuilder()
+        b.set("eval_run_id", eval_run_id)
+        b.set("run_id", run_id)
+        b.set("space_id", space_id)
+        b.set_raw("created_at", "current_timestamp()")
+        b.set_raw("created_by", "current_user()")
+        b.set("question_id", question_id)
+        b.set("assessment", entry.get("assessment"))
+        b.set("primary_failure", entry.get("primary_failure"))
+        b.set("baseline_sql_hash", entry.get("baseline_sql_hash"))
+        b.set("candidate_sql_hash", entry.get("candidate_sql_hash"))
+        b.set("baseline_result_digest", entry.get("baseline_result_digest"))
+        b.set("candidate_result_digest", entry.get("candidate_result_digest"))
+        b.set("latency_ms", entry.get("latency_ms"))
+        sql, params = b.build(self._fq_table(schema.EVAL_RESULTS))
+        self._run(sql, params)
+
     # --- list_history ------------------------------------------------------
     def list_history(
         self,
@@ -320,7 +415,9 @@ class UCTableStore:
         """Resolve an id across all tables; returns the full record or ``None``.
 
         Searches each table's logical-PK column in order (config first). Optimization
-        runs / eval results have no P1 write tool but are resolved here (spec §6).
+        runs are written by ``record_optimization_run`` (P2) and resolved here by ``run_id``;
+        eval-result rows have no dedicated get tool but are resolved here by ``eval_run_id``
+        (spec §6).
         """
         for spec in schema.TABLE_SPECS:
             record = self._find_by_id(spec, id_value)
