@@ -151,7 +151,7 @@ These facts (from the investigation) directly constrain the design. Confidence +
 
 | #   | Tool                      | Purpose                                                                                                            | Key inputs                                                                                                                                                       | Returns                                                                   |
 | --- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| 1   | `save_config_snapshot`    | Persist a Genie Space config version (the mandatory before/after snapshot). The caller supplies the config — the MCP does **not** fetch it.                                        | `space_id`, `serialized_space` (**required** — caller passes the live config), `etag?`, `version_label`, `parent_config_version_id`, `run_id?`, `changed_surfaces?`, `change_summary?`, `rollback_reference?` | `config_version_id`, `version`, `config_hash`, `etag`                     |
+| 1   | `save_config_snapshot`    | Persist a Genie Space config version (the mandatory before/after snapshot). The caller supplies the config — the MCP does **not** fetch it.                                        | `space_id`, `serialized_space` (**required** — caller passes the live config), `etag?`, `version_label`, `parent_config_version_id`, `run_id?`, `changed_surfaces?`, `change_summary?`, `rollback_reference?` | `config_version_id`, `config_hash`, `etag`                     |
 | 2   | `save_report`             | Persist a Markdown artifact (diagnose write-up, query-optimization report, design proposal, metric-view YAML/DDL). | `space_id`, `artifact_type`, `title`, `content_md`, `run_id?`, `scores_findings?`                                                                                | `artifact_id`                                                             |
 | 3   | `record_optimization_run` | Persist a tuning run: run summary + per-question eval results + decision (the `runs/` + `eval_results/` records).  | `space_id`, `run_id`, run fields (see §7), `eval_results[]`, `decision`                                                                                          | `run_id`                                                                  |
 | 4   | `list_history`            | Timeline of versions/runs/reports for a Space.                                                                     | `space_id`, `artifact_type?`, `limit?`, `since?`                                                                                                                 | array of `{id, type, version, created_at, created_by, summary, decision}` |
@@ -168,6 +168,7 @@ These facts (from the investigation) directly constrain the design. Confidence +
 - All inputs validated against the field contracts in §7; reject unknown `artifact_type`. Writes **route to the per-artifact table** (§7.1); `list_history` UNIONs across the tables and `get_artifact` resolves an id across them.
 - Idempotency: `save_*` accepts a client-supplied `idempotency_key` (e.g. `config_hash`) to avoid duplicate rows on retry.
 - Rollback has **no MCP tool**: the skill retrieves the target via `get_artifact`, re-applies it through Genie Code's own Space-edit path, and records the result via `save_config_snapshot` (see §8).
+- **`version` in outputs (P1):** `save_config_snapshot` no longer returns a `version`; the `version` key still present in each `list_history` row is **retained for output-shape stability but is always `null`** — the monotonic counter was removed (§7.1). Order results by `created_at`.
 
 ---
 
@@ -185,9 +186,8 @@ The schema **deliberately aligns with `optimize-genie-space/references/optimizat
 CREATE TABLE IF NOT EXISTS ${HISTORY_CATALOG}.genie_space_history.config_snapshots (
   config_version_id   STRING    NOT NULL,        -- 32-char hex UUID, logical PK
   space_id            STRING    NOT NULL,
-  version             BIGINT    NOT NULL,         -- monotonic per space_id (1,2,3…)
   parent_version_id   STRING,                     -- parent_config_version_id → rollback lineage
-  created_at          TIMESTAMP DEFAULT current_timestamp(),
+  created_at          TIMESTAMP DEFAULT current_timestamp(),  -- ordering/identity key: list_history sorts created_at DESC, config_version_id ASC
   created_by          STRING    DEFAULT current_user(),  -- attribution + row-filter key
   skill_name          STRING,
   config_json         STRING,                     -- JSON serialized_space; opt-in VARIANT on DBR >= 15.3
@@ -200,6 +200,8 @@ CREATE TABLE IF NOT EXISTS ${HISTORY_CATALOG}.genie_space_history.config_snapsho
   change_summary      STRING
 ) USING DELTA TBLPROPERTIES (delta.enableRowTracking = true);
 ```
+
+> **P1 update — no monotonic `version` column.** Earlier drafts gave `config_snapshots` a `version BIGINT` counter (`MAX(version)+1` per `space_id`). A UC SQL warehouse has no atomic insert-if-absent, no enforced unique/PK constraint, and no multi-statement transaction, so concurrent writers could allocate the **same** version — a uniqueness guarantee the code could not actually hold. P1 therefore **drops the counter**: each snapshot is identified by `config_version_id` (UUID PK) and ordered by the server-stamped `created_at` (`list_history` sorts `created_at DESC, config_version_id ASC`). Lineage uses `parent_version_id` (a `config_version_id`), never a counter; idempotency uses a client-supplied `idempotency_key`. *(Delivered in PR #23.)*
 
 **(2) `optimization_runs`** — one row per tuning run (mirrors the skill's `runs/`).
 
@@ -321,7 +323,7 @@ Optimistic concurrency is a **body `etag` field** (not an `If-Match` header): Ge
 
 **Flow (snapshot owned by the MCP; apply owned by Genie Code):**
 
-1. **Snapshot first (enforced by the skill).** Before any edit, `optimize-genie-space` reads the live config (it already does this to edit it) and calls **`save_config_snapshot`**, passing `serialized_space` + the Space `etag` + `config_hash`. The MCP stores them and computes `version`/lineage. The skill's hard rule stands: refuse to edit if the snapshot didn't persist.
+1. **Snapshot first (enforced by the skill).** Before any edit, `optimize-genie-space` reads the live config (it already does this to edit it) and calls **`save_config_snapshot`**, passing `serialized_space` + the Space `etag` + `config_hash`. The MCP stores them and computes lineage (no monotonic version counter — see §7.1). The skill's hard rule stands: refuse to edit if the snapshot didn't persist.
 2. **Lineage.** `parent_version_id` + `run_id` + `baseline/candidate` pointers reconstruct the version DAG (server-side, from the stored rows).
 3. **Restore (on a ROLL BACK decision) — driven by Genie Code:**
   - **`get_artifact(config_version_id)`** → the stored `serialized_space` (+ outer metadata + `etag`). *(Optional preview: `diff_configs`, or two `get_artifact` calls, show the change before applying.)*
@@ -415,6 +417,13 @@ Integration is **opt-in and additive**: skills detect the MCP server's tools and
   >
   > **Still open for the real build:** create the durable `HISTORY_OWNER_GROUP` and add the app SP to it (or have a metastore admin run the one-time `OWNER TO`); grant the app SP on the catalog; authorize `user_api_scopes` (`sql`); settle private-vs-shared history (§5). *(No longer the MCP's concern under Option A: the minimum Genie permission and stale-etag behavior — those live with Genie Code's apply path.)*
 - **P1 — Write + read:** `save_config_snapshot`, `save_report`, `list_history`, `get_artifact` against the UC table (OBO + row filter). Wire `diagnose`/`optimize-query` reports.
+  > **P1 OUTCOME — delivered in [PR #23](https://github.com/hiydavid/databricks-agent-skills/pull/23) (`genie-code/mcp-genie-space-history/app/`); built by a coding agent, cross-reviewed by a different vendor, gates green (pytest / ruff / pyright):**
+  >
+  > - ✅ Production `app/` package: OBO auth + app-SP bootstrap, UC storage adapter, idempotent provisioning of all 7 §7.1 tables with the `only_mine` row filter (a grant is **withheld** on any table whose filter did not apply) + ownership/grants, `STRING`-default JSON (VARIANT opt-in), `allowColumnDefaults`.
+  > - ✅ All four tools, OBO throughout; writes stamp `created_by`/`created_at` server-side; `redact` defaults true; unknown `artifact_type` rejected; `scope_error` on missing scope / identity-auth failure.
+  > - ✅ **Concurrency decision:** dropped the monotonic `version` counter — snapshots are ordered/identified by `created_at` + `config_version_id` (§7.1); idempotency via a client `idempotency_key`.
+  > - ⚠️ **No schema migration:** provisioning is `CREATE TABLE IF NOT EXISTS` only. Fresh deploys are correct, but a `config_snapshots` table created by the old spike bootstrap still has `version BIGINT NOT NULL` and must have that column dropped (or the table recreated) before deploying P1.
+  > - **Scope:** 'Wire diagnose/optimize-query' = server-side support for the `diagnose_report` + `query_report` artifact types via `save_report`; the per-skill `SKILL.md` text edits remain **P5** (docs-only).
 - **P2 — Runs + rollback wiring:** `record_optimization_run`. Wire `optimize-genie-space`'s snapshot + run + rollback calls — rollback = `get_artifact` the target snapshot, the **skill** re-applies it, then `save_config_snapshot` the result (the MCP has **no** rollback tool).
 - **P3 — Polish:** `diff_configs`, redaction defaults, observability. *(Self-serve / DABs packaging is promoted to its own phase — see P4.)*
 - **P4 — Packaging & self-serve deploy.** Turn the working server into something an operator can deploy **themselves, from git, onto Databricks Apps** with minimal hand-holding. Goal: a clone → configure → deploy path plus the operator runbook for the human-only grant/ownership steps the server cannot self-perform. Deliverables:
