@@ -1,0 +1,42 @@
+# Local dev tooling config (lint + typecheck + tests). Databricks Apps installs
+# requirements.txt at deploy; this file is for the dev inner loop and CI (P4).
+[project]
+name = "mcp-genie-space-history"
+version = "0.1.0"
+description = "Genie Space History MCP server (P1 — write + read) on Databricks Apps"
+requires-python = ">=3.11"
+dependencies = [
+    "databricks-sdk>=0.118.0",
+    "fastapi>=0.115.12",
+    "uvicorn>=0.34.2",
+    "fastmcp>=2.12.5",
+    "mcp[cli]>=1.14.0",
+    "pydantic>=2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Imports, pyflakes (unused/undefined), bare-except, pycodestyle errors.
+select = ["I", "F", "E", "W", "B"]
+
+[tool.pyright]
+include = ["server", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+reportMissingImports = "warning"
+
+[tool.pytest.ini_options]
+# Make the `server` package importable when running pytest from this directory.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

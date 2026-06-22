@@ -1,0 +1,12 @@
+# Runtime dependencies for the Genie Space History MCP server (Databricks Apps
+# installs this on deploy). Pins per spec §10 / P0 findings.
+#
+# databricks-sdk>=0.118.0: floor for the genie `etag` field used by Genie Code's
+# rollback apply path (P0 finding F-1). The MCP itself only uses the SDK's
+# statement_execution + current_user APIs, but we keep the same floor.
+databricks-sdk>=0.118.0
+fastapi>=0.115.12
+uvicorn>=0.34.2
+fastmcp>=2.12.5
+mcp[cli]>=1.14.0
+pydantic>=2
