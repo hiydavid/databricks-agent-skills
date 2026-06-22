@@ -1,4 +1,5 @@
-"""The four P1 MCP tools (spec §6), plus their input validation.
+"""The P1 write/read MCP tools plus the P2 ``record_optimization_run`` tool (spec §6),
+with their input validation.
 
 Split into two layers so the logic is unit-testable with no live workspace:
 
@@ -38,6 +39,57 @@ def _require(value: Optional[str], name: str) -> str:
     if value is None or (isinstance(value, str) and not value.strip()):
         raise ToolValidationError(f"`{name}` is required and must be non-empty.")
     return value
+
+
+# Allowed keys on an `eval_results[]` entry (spec §7.1 eval_results columns the caller
+# supplies — server-stamped eval_run_id/run_id/space_id/created_* are NOT caller fields).
+_EVAL_STR_FIELDS = (
+    "question_id",
+    "assessment",
+    "primary_failure",
+    "baseline_sql_hash",
+    "candidate_sql_hash",
+    "baseline_result_digest",
+    "candidate_result_digest",
+)
+_EVAL_RESULT_FIELDS = frozenset((*_EVAL_STR_FIELDS, "latency_ms"))
+
+
+def _validate_eval_results(eval_results: Optional[Sequence[Any]]) -> list[dict]:
+    """Validate the shape of each ``eval_results[]`` entry against the §7.1 contract.
+
+    Each entry must be an object whose keys are all recognized eval-result fields; string
+    columns must be strings and ``latency_ms`` an integer. Raises
+    :class:`ToolValidationError` on a malformed entry. Returns the cleaned list (``[]`` when
+    no eval rows were supplied).
+    """
+    if eval_results is None:
+        return []
+    if not isinstance(eval_results, (list, tuple)):
+        raise ToolValidationError("`eval_results` must be a list of objects.")
+    cleaned: list[dict] = []
+    for i, entry in enumerate(eval_results):
+        if not isinstance(entry, dict):
+            raise ToolValidationError(
+                f"eval_results[{i}] must be an object (got {type(entry).__name__})."
+            )
+        unknown = set(entry) - _EVAL_RESULT_FIELDS
+        if unknown:
+            allowed = ", ".join(sorted(_EVAL_RESULT_FIELDS))
+            raise ToolValidationError(
+                f"eval_results[{i}] has unknown field(s): {', '.join(sorted(unknown))}; "
+                f"allowed fields: {allowed}"
+            )
+        latency = entry.get("latency_ms")
+        # bool is an int subclass — reject it explicitly so True/False can't pass as latency.
+        if latency is not None and (isinstance(latency, bool) or not isinstance(latency, int)):
+            raise ToolValidationError(f"eval_results[{i}].latency_ms must be an integer.")
+        for key in _EVAL_STR_FIELDS:
+            value = entry.get(key)
+            if value is not None and not isinstance(value, str):
+                raise ToolValidationError(f"eval_results[{i}].{key} must be a string.")
+        cleaned.append(dict(entry))
+    return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +178,56 @@ def save_report_core(
         config_version_id=config_version_id,
         skill_name=skill_name,
         redacted=redacted,
+        idempotency_key=idempotency_key,
+    )
+    result["ok"] = True
+    return result
+
+
+def record_optimization_run_core(
+    store: UCTableStore,
+    *,
+    space_id: str,
+    run_id: str,
+    eval_results: Optional[Sequence[Any]] = None,
+    baseline_score: Optional[float] = None,
+    candidate_score: Optional[float] = None,
+    score_delta: Optional[float] = None,
+    fixed_count: Optional[int] = None,
+    regressed_count: Optional[int] = None,
+    unchanged_count: Optional[int] = None,
+    excluded_count: Optional[int] = None,
+    decision: Optional[str] = None,
+    parent_config_version_id: Optional[str] = None,
+    result_config_version_id: Optional[str] = None,
+    change_summary: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+) -> dict:
+    _require(space_id, "space_id")
+    _require(run_id, "run_id")
+    cleaned_evals = _validate_eval_results(eval_results)
+
+    # Convenience: derive score_delta when the caller omits it but both endpoints exist,
+    # so the stored row is internally consistent (spec §7.1 score_delta column).
+    effective_delta = score_delta
+    if effective_delta is None and baseline_score is not None and candidate_score is not None:
+        effective_delta = candidate_score - baseline_score
+
+    result = store.record_optimization_run(
+        space_id=space_id,
+        run_id=run_id,
+        eval_results=cleaned_evals,
+        baseline_score=baseline_score,
+        candidate_score=candidate_score,
+        score_delta=effective_delta,
+        fixed_count=fixed_count,
+        regressed_count=regressed_count,
+        unchanged_count=unchanged_count,
+        excluded_count=excluded_count,
+        decision=decision,
+        parent_config_version_id=parent_config_version_id,
+        result_config_version_id=result_config_version_id,
+        change_summary=change_summary,
         idempotency_key=idempotency_key,
     )
     result["ok"] = True
@@ -221,7 +323,7 @@ def _run_tool(settings: Settings, tool_name: str, core: Callable[[UCTableStore],
 
 
 def register_tools(mcp_server, settings: Settings) -> None:
-    """Register the four P1 tools on the FastMCP server."""
+    """Register the P1 write/read tools + the P2 ``record_optimization_run`` on the server."""
 
     @mcp_server.tool
     def save_config_snapshot(
@@ -304,6 +406,56 @@ def register_tools(mcp_server, settings: Settings) -> None:
                 config_version_id=config_version_id,
                 skill_name=skill_name,
                 redacted=effective_redacted,
+                idempotency_key=idempotency_key,
+            ),
+        )
+
+    @mcp_server.tool
+    def record_optimization_run(
+        space_id: str,
+        run_id: str,
+        eval_results: Optional[list[dict]] = None,
+        baseline_score: Optional[float] = None,
+        candidate_score: Optional[float] = None,
+        score_delta: Optional[float] = None,
+        fixed_count: Optional[int] = None,
+        regressed_count: Optional[int] = None,
+        unchanged_count: Optional[int] = None,
+        excluded_count: Optional[int] = None,
+        decision: Optional[str] = None,
+        parent_config_version_id: Optional[str] = None,
+        result_config_version_id: Optional[str] = None,
+        change_summary: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> dict:
+        """Persist a tuning run: one run summary + per-question eval results + decision.
+
+        Writes one row to ``optimization_runs`` and one row per ``eval_results`` entry to
+        ``eval_results`` (FK ``run_id``). The run is keyed by an id derived from
+        ``idempotency_key`` (default: ``run_id``), so a retry returns the existing run with
+        ``deduplicated=true`` and does not re-insert eval rows. ``score_delta`` is derived
+        from ``candidate_score - baseline_score`` when omitted and both are present.
+        Returns ``{run_id, eval_count, deduplicated}``. (Writes optimization_runs + eval_results.)
+        """
+        return _run_tool(
+            settings,
+            "record_optimization_run",
+            lambda store: record_optimization_run_core(
+                store,
+                space_id=space_id,
+                run_id=run_id,
+                eval_results=eval_results,
+                baseline_score=baseline_score,
+                candidate_score=candidate_score,
+                score_delta=score_delta,
+                fixed_count=fixed_count,
+                regressed_count=regressed_count,
+                unchanged_count=unchanged_count,
+                excluded_count=excluded_count,
+                decision=decision,
+                parent_config_version_id=parent_config_version_id,
+                result_config_version_id=result_config_version_id,
+                change_summary=change_summary,
                 idempotency_key=idempotency_key,
             ),
         )
