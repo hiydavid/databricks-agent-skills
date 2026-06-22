@@ -7,6 +7,10 @@
 databricks-sdk>=0.118.0
 fastapi>=0.115.12
 uvicorn>=0.34.2
-fastmcp>=2.12.5
-mcp[cli]>=1.14.0
+# fastmcp/mcp are MAJOR-version-pinned: 2.x and 3.x have incompatible APIs (e.g.
+# FastMCP.get_tools() was removed in 3.x), so an unbounded floor would make installs
+# non-deterministic across the 2.x->3.x boundary. We target 3.x (validated end-to-end:
+# http_app(path=..., stateless_http=True) -> StarletteWithLifespan mount + @tool).
+fastmcp>=3.4,<4
+mcp[cli]>=1.14.0,<2
 pydantic>=2

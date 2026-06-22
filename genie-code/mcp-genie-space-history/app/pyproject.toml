@@ -9,8 +9,9 @@ dependencies = [
     "databricks-sdk>=0.118.0",
     "fastapi>=0.115.12",
     "uvicorn>=0.34.2",
-    "fastmcp>=2.12.5",
-    "mcp[cli]>=1.14.0",
+    # Major-pinned: 2.x and 3.x have incompatible APIs — keep installs deterministic.
+    "fastmcp>=3.4,<4",
+    "mcp[cli]>=1.14.0,<2",
     "pydantic>=2",
 ]
 

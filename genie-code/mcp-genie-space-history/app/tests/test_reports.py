@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 from fastmcp import FastMCP
@@ -135,14 +136,17 @@ def test_created_by_is_server_side_current_user(store, backend):
 
 
 # --- N1: accept the spec's `redact` spelling as an alias for `redacted` -----
-def _registered_tools(settings: Settings):
+def _registered_tool(settings: Settings, name: str) -> Any:
+    # get_tool(name) is the public single-tool accessor present in the pinned
+    # FastMCP (3.x). It returns a FunctionTool with .parameters (JSON schema) + .fn;
+    # typed as Any here since we introspect those attributes dynamically.
     mcp = FastMCP(name="test")
     register_tools(mcp, settings)
-    return asyncio.run(mcp.get_tools())  # type: ignore[attr-defined]
+    return asyncio.run(mcp.get_tool(name))
 
 
 def test_save_report_schema_accepts_both_redact_and_redacted(settings):
-    tool = _registered_tools(settings)["save_report"]
+    tool = _registered_tool(settings, "save_report")
     props = tool.parameters["properties"]
     assert "redact" in props
     assert "redacted" in props
@@ -153,7 +157,7 @@ def test_redact_alias_overrides_redacted(settings, monkeypatch):
     store = UCTableStore(backend, settings, user_name="alice@example.com")
     monkeypatch.setattr(tools_module, "_build_user_store", lambda _s: store)
 
-    tool = _registered_tools(settings)["save_report"]
+    tool = _registered_tool(settings, "save_report")
     result = tool.fn(
         space_id="s1",
         artifact_type="diagnose_report",
@@ -171,7 +175,7 @@ def test_redact_defaults_true_via_tool(settings, monkeypatch):
     store = UCTableStore(backend, settings, user_name="alice@example.com")
     monkeypatch.setattr(tools_module, "_build_user_store", lambda _s: store)
 
-    tool = _registered_tools(settings)["save_report"]
+    tool = _registered_tool(settings, "save_report")
     tool.fn(space_id="s1", artifact_type="query_report", title="t", content_md="c")
     _sql, params = backend.inserts_into(schema.QUERY_REPORTS)[-1]
     assert param_value(params, "redacted") == "true"
