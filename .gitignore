@@ -8,3 +8,5 @@ package-lock.json
 /test-skills/agent-architecture-*
 .vscode
 */.pi
+.polly
+.worktrees
