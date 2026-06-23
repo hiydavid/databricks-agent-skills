@@ -1,13 +1,27 @@
 # Data Profiling And Readiness
 
-Use this reference after candidate data sources are selected and before proposing Genie Space changes in Genie Code. Prefer Databricks-native metadata first, then run bounded, cost-aware, read-only SQL only where it improves the plan.
+Use this reference after candidate data sources are selected and before proposing Genie Space changes in Genie Code. Prefer Databricks-native metadata first, then run bounded, cost-aware, read-only SQL to build the evidence the design depends on.
+
+## Context Evidence Gate
+
+Before rating any business question High confidence or proposing a live Space, each included source must have, at minimum:
+
+- Unity Catalog metadata and `DESCRIBE` output (columns, types, comments).
+- A row count or a bounded estimate, with sampling or partition scope noted. Never present a sampled count as exact.
+- A freshness signal (max event/load date, or lineage/refresh evidence).
+- A narrow sample preview of the columns the business questions actually touch.
+- Key and join evidence for every proposed relationship: declared constraints, naming, duplicate-key/cardinality checks, or query-history support.
+
+Record any check you cannot complete (permissions, cost, or missing system tables) as an explicit confidence reduction for the affected questions, not a silent omission. Profiling is the evidence that justifies the readiness rating, not optional polish.
 
 ## Phased Inspection
 
 1. **Structure.** Confirm each table/view/Metric View, comments, columns, data types, constraints, and sample rows with a narrow selected column list and `LIMIT`.
-2. **Quality and usage.** Profile nulls, empty strings, constants, distinct counts, casing issues, boolean-as-string values, sensitive/noisy columns, and usage/lineage with scoped filters or samples before exact full-table scans.
-3. **Column profiling.** Profile only columns that affect Genie quality: dates, likely filters, categorical strings, join keys, and candidate measures.
-4. **Readiness.** Map the profiled data back to the user's 3-5 business questions and record High/Medium/Low confidence for each question.
+2. **Keys and relationships.** Read declared primary, foreign, and unique keys from `information_schema` before probing duplicate keys, so join specs start from documented relationships rather than guesses.
+3. **Quality.** Profile nulls, empty strings, constants, distinct counts, casing issues, boolean-as-string values, and sensitive/noisy columns with scoped filters or samples before exact full-table scans.
+4. **Usage and lineage.** Use table lineage and query history (where the system tables are available and authorized) to find real join paths, common filters, high-traffic columns, and benchmark/sample-question candidates. Treat this as primary design evidence, not an optional extra.
+5. **Column profiling.** Profile only columns that affect Genie quality: dates, likely filters, categorical strings, join keys, and candidate measures.
+6. **Readiness.** Map the profiled data back to the user's 3-5 business questions and score confidence using the rubric in **Readiness Assessment** below.
 
 ## Bounded Profiling Guardrails
 
@@ -39,6 +53,26 @@ FROM <catalog>.information_schema.columns
 WHERE table_schema = '<schema>'
 ORDER BY table_name, ordinal_position;
 ```
+
+Declared keys and constraints. Run before the duplicate-key probes so join specs start from documented relationships:
+
+```sql
+SELECT
+  tc.constraint_type,
+  tc.table_name,
+  kcu.column_name,
+  kcu.ordinal_position
+FROM <catalog>.information_schema.table_constraints tc
+JOIN <catalog>.information_schema.key_column_usage kcu
+  ON tc.constraint_catalog = kcu.constraint_catalog
+ AND tc.constraint_schema = kcu.constraint_schema
+ AND tc.constraint_name = kcu.constraint_name
+WHERE tc.table_schema = '<schema>'
+  AND tc.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY', 'UNIQUE')
+ORDER BY tc.table_name, tc.constraint_type, kcu.ordinal_position;
+```
+
+Unity Catalog primary and foreign keys are informational and not enforced, so confirm any relationship found here with the duplicate-key/cardinality checks below before proposing a Genie join.
 
 Metric View metadata:
 
@@ -172,6 +206,13 @@ ORDER BY start_time DESC
 LIMIT 50;
 ```
 
+Optional governance signals, only when these features are enabled and you are authorized to read them:
+
+- Column-level classification or sensitivity tags exposed through `information_schema` tag metadata (for example `column_tags`) to spot fields to hide or keep out of prompt matching.
+- Data-quality or freshness metrics from Lakehouse Monitoring output tables to gauge whether a field is reliable enough to expose.
+
+If these tables are unavailable or access is denied, proceed without them and note any resulting confidence limitation.
+
 ## How To Use Findings
 
 - Hide ETL metadata, all-null columns, raw blobs, embeddings, secrets, tokens, and sensitive free text.
@@ -183,9 +224,18 @@ LIMIT 50;
 
 ## Readiness Assessment
 
-Score each business question:
+This is the canonical readiness rubric for the create-genie-space skill; `SKILL.md` and `space-design-guide.md` point here instead of redefining it.
 
-- **High:** all required sources, fields, values, and join/metric definitions are supported.
+Assess each business question across four dimensions:
+
+- **Semantic coverage:** required measures, dimensions, filters, and time fields exist.
+- **Data quality and freshness:** important fields are populated, current, correctly typed, and have usable values.
+- **Modelability:** grain and join paths are supported by evidence or user confirmation.
+- **GenAI context readiness:** descriptions, synonyms, display names, and prompt matching map business language to the data.
+
+Then score each question:
+
+- **High:** all required sources, fields, values, and join/metric definitions are supported, and the Context Evidence Gate is met.
 - **Medium:** answerable with caveats, missing descriptions, uncertain filters, or user-confirmed assumptions.
 - **Low:** missing source, measure, dimension, time field, join path, or governed metric definition.
 
