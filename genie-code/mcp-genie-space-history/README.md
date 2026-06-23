@@ -1,29 +1,25 @@
-# (WIP) mcp-genie-space-history
+# mcp-genie-space-history
 
-Home of the **Genie Space History MCP** server. Design lives one level up in
+Home of the **Genie Space History MCP** server — the backend that persists the
+artifacts the `genie-code/` skills emit (config snapshots, reports, optimization
+runs) to governed **Unity Catalog Delta tables** and serves them back. It runs on
+**Databricks Apps**, mounted at **`/mcp`** over stateless streamable HTTP, and runs
+every read/write **On-Behalf-Of-User (OBO)**. Under Option A it touches UC only — it
+**never calls the Genie API**. The authoritative design lives one level up in
 `../genie-space-history-mcp-design.md`.
 
-> **Status: P0 de-risking spike.** Everything here is throwaway/learning code whose job
-> is to settle the spec's runtime unknowns (§12 residuals) and prove the end-to-end
-> mechanics on a throwaway Space — **not** to be the production server.
+The production server is in [`app/`](app). The **P1 (write + read)** slice and the
+**P2 `record_optimization_run`** tool have shipped — five MCP tools in total
+(spec §6): `save_config_snapshot`, `save_report`, `record_optimization_run`,
+`list_history`, `get_artifact`.
 
 ## Contents
 
 | Path | What |
 |---|---|
-| `spike/` | Runnable spike: MCP server (`server/`) + local probes (`probes/`) sharing `spike_core.py`. |
-| `RUNBOOK.md` | Copy-pasteable, per-criterion commands (scriptable #3–#6 + deploy/UI #1–#2). |
-| `FINDINGS.md` | What actually ran, real output, and the resolved value for each §12 residual. |
+| `app/` | The production MCP server: FastAPI + FastMCP package (`server/`) with the shipped P1/P2 tools and its test suite. See [`app/README.md`](app/README.md). |
+| `RUNBOOK.md` | Operator runbook for the `app/` server: app-SP grants, deploy (`databricks sync` + `databricks apps deploy`), OBO scopes, smoke test, and the Genie-Code connect step. |
+| `FINDINGS.md` | Historical record: the P0 de-risking findings that resolved the design's §12 runtime residuals before the server was built. |
 
-## The six P0 exit criteria (design spec §13)
-
-| # | Criterion | How it's covered here |
-|---|---|---|
-| 1 | Hosting: hello-world MCP on Apps, reachable at `/mcp`, connectable from Genie Code | `spike/server/` + RUNBOOK §1 (deploy + UI) |
-| 2 | OBO `current_user.me()` returns the calling user | `whoami` tool / `probes ... whoami`; OBO-over-header is RUNBOOK §2 |
-| 3 | App SP auto-creates schema + table (`IF NOT EXISTS`); catalog NOT created | `provision` probe / `provision_history_schema` tool |
-| 4 | VARIANT probe → usable or default STRING | `variant` probe / `variant_probe` tool |
-| 5 | Genie `get_space` → `update_space` round-trip; record min permission | `roundtrip` probe / `genie_roundtrip` tool |
-| 6 | Stale-etag update rejected (optimistic lock) | `etag` probe / `genie_etag_check` tool |
-
-See `RUNBOOK.md` for the full sequence and `FINDINGS.md` for results.
+See `../genie-space-history-mcp-design.md` for the full design and `app/README.md`
+for the server's module layout, auth model, and dev inner loop.

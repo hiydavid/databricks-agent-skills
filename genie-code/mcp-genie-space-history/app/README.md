@@ -5,8 +5,7 @@ and mounted at **`/mcp`** over stateless streamable HTTP. It persists the artifa
 the `genie-code/` skills emit to governed **Unity Catalog Delta tables** and serves
 them back. The MCP **never calls the Genie API** — it only touches UC (Option A).
 
-This is the **P1 (write + read)** slice. The immutable P0 spike lives alongside in
-[`../spike/`](../spike); the authoritative design is
+This is the **P1 (write + read)** slice. The authoritative design is
 [`../../genie-space-history-mcp-design.md`](../../genie-space-history-mcp-design.md).
 
 ## What ships in P1

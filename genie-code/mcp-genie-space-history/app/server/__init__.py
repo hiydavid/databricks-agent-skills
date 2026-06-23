@@ -1,6 +1,6 @@
 """Genie Space History MCP server (P1 — write + read).
 
-Productionizes the P0 spike (../spike/) into a real package: a FastAPI + FastMCP
+Productionizes the de-risked P0 mechanics into a real package: a FastAPI + FastMCP
 server, mounted at ``/mcp`` over stateless streamable HTTP, that persists the
 artifacts the ``genie-code/`` skills emit to governed Unity Catalog Delta tables.
 
