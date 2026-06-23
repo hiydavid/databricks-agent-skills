@@ -1,11 +1,11 @@
 # Genie Query Optimization Guide
 
-Use this reference when analyzing benchmark-generated Genie Space SQL, Query History Insights, SQL warehouse behavior, and table layout from a performance and cost perspective in Databricks-native workflows.
+Use this reference when analyzing a single Genie Space's executed SQL — pulled from `system.query.history` filtered by `query_source.genie_space_id` — together with Query performance insights, SQL warehouse behavior, and table layout, from a performance and cost perspective. Benchmark runs are an optional way to generate or reproduce load, not the primary evidence source.
 
 ## Navigation
 
-- `Evidence Order`: use benchmark-generated Query History Insights first when available, then validate with profile, table, and warehouse facts.
-- `Benchmark And Insights Workflow`: launch approved benchmark runs and triage Query History insight candidates.
+- `Evidence Order`: start from the space's executed queries in Query History (filtered by `query_source.genie_space_id`), prioritize Query performance insights, then validate with profile, table, and warehouse facts.
+- `Query History And Insights Workflow`: scope to the space's executed queries and triage insight candidates; launch an approved benchmark only to generate load when production history is sparse.
 - `Read-Only SQL Templates`: bounded inspection templates for Genie Query History, warehouse activity, table metadata, layout, and optimization history.
 - `Issue Taxonomy`: classify performance symptoms with stable labels.
 - `Query Performance Insight Routing`: map Databricks insight labels to owners, validation, and anti-patterns.
@@ -17,13 +17,13 @@ Use this reference when analyzing benchmark-generated Genie Space SQL, Query His
 
 Use this order unless the user provides a specific statement ID, profile, or existing insight-backed Query History row first:
 
-1. Confirm the benchmark target, target questions, benchmark run window, warehouse, and user approval before launching any native benchmark run.
-2. Run the approved native benchmark, or use a completed benchmark run/query history window when benchmark launch is not approved.
-3. Open Query History, filter to benchmark-generated Genie queries, and prioritize rows with Query performance insights.
-4. Use Query History's Genie Code `/analyze` or `/optimize` action for an insight-backed row when available, but treat the output as a candidate that must be validated.
-5. Confirm the generated SQL is semantically correct enough to optimize. If the query is answering the wrong business question, route to `semantic_wrong_sql`.
-6. Inspect Query Profile for the slowest operators, scans, joins, shuffles, sorts, aggregates, memory, rows, spill, queue symptoms, and Photon fallback.
-7. Inspect `system.query.history` for Genie-originated statements, durations, scan metrics, cache status, spill, queue time, and warehouse ID when system tables are accessible.
+1. Confirm `diagnose-genie-space` has attributed the latency to SQL runtime (not query generation) and that the generated SQL is correct. If that attribution is missing, hand back rather than re-deriving the generation-vs-execution split here.
+2. Pull the space's executed queries from `system.query.history` filtered by `query_source.genie_space_id` for the target window. The Query History UI cannot filter by Space or query source, so scope with SQL.
+3. Prioritize the space's queries that carry Query performance insights before manually reviewing slow rows without insights.
+4. When a query has actionable insights, use the Optimize button to open Genie Code, but treat its rewrite or recommendation as a candidate that must be validated.
+5. If production history is sparse or unrepresentative, optionally run an approved native benchmark to generate load, then re-query Query History.
+6. Confirm the generated SQL is semantically correct enough to optimize. If the query is answering the wrong business question, route to `semantic_wrong_sql`.
+7. Inspect Query Profile for the slowest operators, scans, joins, shuffles, sorts, aggregates, memory, rows, spill, queue symptoms, and Photon fallback.
 8. Inspect the Space sources and instructions that influence query shape, including broad source scope, hidden/exposed columns, joins, SQL snippets, examples, and Metric Views.
 9. Inspect source objects for layout, statistics, clustering, partitioning, predictive optimization, and whether views or materialized views would reduce repeated work.
 10. Inspect warehouse settings and events after separating query-shape and table-layout causes from queue, startup, memory, and concurrency causes.
@@ -48,24 +48,26 @@ Do not use aggregate latency alone as proof of root cause. Separate compile time
 - Warehouse events system table: https://docs.databricks.com/aws/en/admin/system-tables/warehouse-events
 - Predictive optimization system table: https://docs.databricks.com/aws/en/admin/system-tables/predictive-optimization
 
-## Benchmark And Insights Workflow
+## Query History And Insights Workflow
 
-Query performance insights are a Private Preview Databricks feature. If the Insights column, lightbulb indicator, or Genie Code action is absent, say so and use the fallback workflow below.
+Query performance insights are a Beta Databricks feature gated on the workspace Previews page. If the Insights column, lightbulb indicator, or the Optimize button is absent, say so and use the fallback workflow below.
 
 When Insights are available:
 
-1. Run only the approved benchmark scope and capture the exact run window.
-2. In Query History, filter by benchmark window, Space, warehouse, user, statement ID, query source, or available tags.
+1. Scope to the target space's executed queries with `system.query.history` filtered by `query_source.genie_space_id` (the Query History UI cannot filter by Space). Capture the exact time window.
+2. In Query History, narrow further with the supported UI filters (user, date range, compute, duration, status, statement type, statement ID, query tags) on those statements.
 3. Sort or scan for rows with performance insights before manually reviewing slow rows without insights.
-4. For each candidate, record the benchmark question, statement ID, insight labels, duration breakdown, warehouse, cache status, and statement preview.
-5. Click the Query History Genie Code `/analyze` or `/optimize` action when available. Keep its candidate rewrite or recommendation only after semantic and profile validation.
-6. Group candidates by repeated insight label, SQL shape, source object, and benchmark question pattern so recommendations address durable workload behavior.
+4. For each candidate, record the originating question when known, statement ID, insight labels, duration breakdown, warehouse, cache status, and statement preview.
+5. When a query has actionable insights, use the Optimize button to open Genie Code. Keep its candidate rewrite or recommendation only after semantic and profile validation.
+6. Group candidates by repeated insight label, SQL shape, source object, and question pattern so recommendations address durable workload behavior.
 
 Fallback when Insights are absent or inaccessible:
 
-- Inspect slow and expensive benchmark queries from Query History by duration, scan bytes, spill, queue time, and cache status.
+- Inspect slow and expensive queries from the space's Query History by duration, scan bytes, spill, queue time, and cache status.
 - Open Query Profile for representative rows and classify using the manual issue taxonomy.
-- State the limitation as preview/access/missing-insight evidence, not as a healthy-performance signal.
+- State the limitation as Beta/access/missing-insight evidence, not as a healthy-performance signal.
+
+If production history is sparse or unrepresentative, an approved native benchmark run is an optional way to generate representative load: capture its run window, then re-query Query History as above. Benchmark definition, evaluation, and quality tuning belong to `optimize-genie-space`, not here.
 
 ## Read-Only SQL Templates
 
@@ -299,6 +301,7 @@ If only the Query History row is available, use the `statement_id` and workspace
 | `scan_no_pruning` | `COVERAGE_FILTER_KEYS_CLUSTERING`, `COVERAGE_FILTER_KEYS_PARTITIONING` | High read files/bytes/rows, low pruning, filters missing clustering or partition columns | Add predicates, align with clustering/partition keys, table layout recommendation |
 | `missing_delta_stats` | `COVERAGE_STATS_DELTA` | Data-skipping stats missing, partial, unavailable, unused, or layout evidence shows poor file skipping | Recommend Delta statistics/predictive optimization follow-up |
 | `missing_optimizer_stats` | `COVERAGE_STATS_OPTIMIZER` | Cost-based optimizer statistics missing/incomplete, weak join/order choices, high planning pressure | Recommend optimizer statistics/predictive optimization follow-up |
+| `auto_liquid_clustering` | `AUTO_LIQUID_CLUSTERING` | Recurring scans on unclustered keys; layout would benefit from automatic liquid clustering | Recommend automatic liquid clustering review with the table owner as follow-up |
 | `layout_key_mismatch` | `COVERAGE_FILTER_KEYS_CLUSTERING`, `COVERAGE_FILTER_KEYS_PARTITIONING` | Filters do not use clustering or partition columns; high scan bytes | Recommend query filter rewrite, liquid clustering key review, or source/view redesign |
 | `wide_projection` | `WIDE_PROJECTION` | `SELECT *`, projected wide columns, high read bytes relative to produced rows | Hide noisy columns, use narrower examples/snippets, project needed columns only |
 | `exploding_join` | `EXPLODING_JOIN` | Join output greatly exceeds input rows; duplicated entities; profile join dominates | Fix join condition, reduce input rows, clarify grain, prejoin or materialize stable relationship |
@@ -319,6 +322,7 @@ If only the Query History row is available, use the `statement_id` and workspace
 
 | Insight label | Owner | Preferred recommendation | Validation | Avoid |
 |---|---|---|---|---|
+| `AUTO_LIQUID_CLUSTERING` | Table owner | Recommend enabling or reviewing automatic liquid clustering for the table as approved follow-up | After approved clustering, confirm lower scan bytes/files and better pruning on the same queries | Enabling clustering inside this skill, or treating it as a Genie Space edit |
 | `CONCURRENT_WRITE` | Data model owner or pipeline owner | Review Delta history and schedule conflicting writes away from benchmark/query windows | Compare failed/retried query windows with write history and rerun affected benchmark questions | Rewriting correct read SQL as the first response |
 | `COVERAGE_FILTER_KEYS_CLUSTERING` | Genie space curator, data model owner, or table owner | Add semantically valid filters on clustering keys, or recommend clustering-key review when filters are durable | Re-run affected benchmark questions and confirm lower read bytes/files with unchanged answers | Adding artificial filters that change the requested result |
 | `COVERAGE_FILTER_KEYS_PARTITIONING` | Genie space curator, data model owner, or table owner | Add required partition filters when the business question implies them, or recommend partition design review | Confirm partition pruning and unchanged benchmark answers | Forcing partition filters when the user asked for all-time/all-partition results |
@@ -365,7 +369,7 @@ Use clear owners in reports:
 
 Validate recommendations without mutating assets during this skill:
 
-- Re-run or inspect the same benchmark questions with a cold Query Profile when possible.
+- Re-run or inspect the same queries (or the same approved benchmark questions, if a benchmark was used) with a cold Query Profile when possible.
 - Compare answer shape, key totals, and benchmark assessment before and after any approved follow-up change.
 - Check `total_duration_ms`, queue durations, execution duration, read bytes, read files, read rows, produced rows, spill bytes, and top operators.
 - For insight-backed candidates, confirm the insight label is consistent with Query Profile and Query History evidence before recommending a lever.
@@ -379,12 +383,14 @@ Validate recommendations without mutating assets during this skill:
 # Genie Query Optimization: <space>
 
 ## Case
-- Benchmark:
-- Benchmark run/window:
-- Questions:
+- Space / Genie Space ID:
+- Query History window:
+- Production sample (statement count):
 - Warehouse:
 - Goal:
+- Latency attribution (from diagnose-genie-space):
 - Correctness status:
+- Benchmark (only if used):
 
 ## Insight Triage
 - Insights availability:
@@ -417,7 +423,7 @@ Validate recommendations without mutating assets during this skill:
 |---|---|---|---|---|
 
 ## Validation Plan
-- Benchmark re-run:
+- Re-run / re-query check (production queries; benchmark only if used):
 - Unchanged answer check:
 - Read-only check:
 - Query Profile check:
