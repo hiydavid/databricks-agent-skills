@@ -61,7 +61,17 @@ WHERE table_schema = '<schema>'
 ORDER BY table_name, constraint_name, ordinal_position;
 ```
 
-Inspect an existing Metric View definition and agent metadata:
+Inspect column tags and governance signals to discover security caveats (PII, restricted columns) instead of only asking the user, when these views are accessible (column names follow Unity Catalog `information_schema`; adjust if your environment differs):
+
+```sql
+SELECT table_name, column_name, tag_name, tag_value
+FROM <catalog>.information_schema.column_tags
+WHERE schema_name = '<schema>'
+  AND table_name IN ('<table_1>', '<table_2>')
+ORDER BY table_name, column_name;
+```
+
+Discover and inspect existing Metric Views before authoring a new one. Metric Views appear among the views listed by the tables query above; introspect each candidate's definition and agent metadata with `AS JSON`, then reuse or extend its governed semantics rather than duplicating formulas:
 
 ```sql
 DESCRIBE TABLE EXTENDED <catalog.schema.metric_view_name> AS JSON;
@@ -308,6 +318,8 @@ LIMIT 50;
 
 ## Draft DDL Shapes
 
+In these skeletons `version: 1.1` enables agent metadata and requires the supporting runtime (see Feature Availability in `metric-view-design-guide.md`); use the supported baseline version when agent metadata is not available.
+
 Create a new Metric View only after user approval:
 
 ```sql
@@ -348,7 +360,7 @@ measures:
 $$;
 ```
 
-Update an existing Metric View only after user approval:
+Update an existing Metric View only after user approval. The update form is bare `ALTER VIEW <target> AS $$ ... $$`; the `WITH METRICS LANGUAGE YAML` marker appears only on `CREATE` and `CREATE OR REPLACE`:
 
 ```sql
 ALTER VIEW <catalog.schema.metric_view_name>
@@ -437,7 +449,7 @@ LIMIT 50;
 Report:
 
 - Source objects inspected and permission limitations.
-- KPI and question confidence: High, Medium, or Low.
+- KPI and question confidence: High, Medium, or Low (levels defined in `metric-view-design-guide.md`, Feasibility Check).
 - Read-only profiling performed and important caveats.
 - Join/cardinality evidence and whether `rely` is justified.
 - Representative Metric View queries checked with `MEASURE()`.
