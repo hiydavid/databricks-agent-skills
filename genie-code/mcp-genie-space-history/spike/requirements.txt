@@ -1,9 +1,0 @@
-# databricks-sdk>=0.118.0 is REQUIRED: the genie etag field (GenieSpace.etag /
-# update_space(etag=...)) used by criteria #5/#6 was added after 0.102.0. Older SDKs
-# silently omit etag, so optimistic concurrency cannot be exercised. (See FINDINGS.md.)
-databricks-sdk>=0.118.0
-fastapi>=0.115.12
-uvicorn>=0.34.2
-fastmcp>=2.12.5
-mcp[cli]>=1.14.0
-pydantic>=2
