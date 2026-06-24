@@ -12,3 +12,4 @@ package-lock.json
 .worktrees
 .claude
 .codex
+.omnigent
