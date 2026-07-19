@@ -41,6 +41,14 @@ Start from the failing question and the user's expected behavior. Then inspect t
 - SQL functions available to the space
 - text instructions that might define or conflict with the behavior
 - benchmarks with similar intent
+- instructions, metadata, examples, or generated SQL that reference tables, views, or columns not attached to the Space (out-of-space references)
+
+Also gather, when the case calls for it:
+
+- **Monitor-tab feedback** (ask the user for exports, screenshots, or reviewable conversation details): thumbs up/down trends, negative ratings, `Fix it` and `Request review` conversations, feedback and reviewer comments, repeated user phrasing, and generated SQL or error text from reviewable conversations. See `Feedback Routing`.
+- **Latency evidence** for slow-response complaints: chat vs Agent mode, benchmark vs ad hoc use, total response time, time before SQL appears, Agent reasoning time, final synthesis time, and Query History execution/queue/warehouse-startup/scan/spill/result-fetch time when available. See `Latency Pre-Routing`.
+- **Permission and governance context**: Space ACLs, user `SELECT` privileges, row filters, column masks, and dynamic views on attached sources.
+- **Benchmark inventory**: size, duplicate clusters, coverage categories, difficulty mix, and whether the set is too small, narrow, easy, redundant, or large for practical iteration.
 
 Use the DBSQL MCP, Databricks SQL, or notebook SQL cells for read-only SQL only when the serialized space does not answer the diagnostic question. Good inspection queries include:
 
@@ -57,6 +65,46 @@ Use the DBSQL MCP, Databricks SQL, or notebook SQL cells for read-only SQL only 
 Never use DDL or DML for diagnosis.
 
 When a metric view is implicated, inspect the metric view definition and run bounded metric-view queries before inspecting underlying raw tables. Drop down to source tables only to verify metric view source SQL, PK/FK constraints, join cardinality, filter scope, or grain issues.
+
+## Latency Pre-Routing
+
+For slow-response complaints, first separate SQL-runtime latency from query-generation or thinking-phase latency. Gather: chat versus Agent mode, benchmark versus ad hoc use, total response time, time before SQL appears, Agent reasoning time, final synthesis time, and Query History execution/queue/warehouse-startup/scan/spill/result-fetch time when available; note whether the same simple question is repeatedly slow.
+
+- If Query History shows SQL execution, queue, warehouse startup, scan, spill, or result-fetch time dominates total latency **and the generated SQL is semantically correct for the question**, stop Space-quality diagnosis and route to query/warehouse follow-up: SQL query profiling, warehouse sizing, or table layout work outside Space configuration (for example with a query-optimization skill such as `optimize-genie-query` when available). State this handoff explicitly in the report.
+- If runtime dominates but the generated SQL is wrong (wrong source, join, grain, or filter producing slow-but-incorrect SQL), classify the underlying Genie failure here and hand off to `optimize-genie-space`; do not treat it as a pure query-runtime problem.
+- If SQL execution is fast but the user waits before SQL appears, during Agent reasoning, or during long final response synthesis, classify the case as `Generation Latency Or Context Overload` and recommend Space configuration cleanup through `optimize-genie-space`.
+- For Agent mode, state that Agent mode can naturally take longer because it creates a plan, runs multiple queries, learns from results, and synthesizes a report. For simple deterministic questions, validate standard chat, a trusted asset, or a concise parameterized example as the lower-latency path.
+- If the latency split is unavailable, ask for or inspect Query History timing before recommending warehouse, table-layout, or Space configuration changes.
+
+## Feedback Routing
+
+Use Monitor-tab feedback as evidence for clustering failures, not as a tuning surface. Do not recommend changing feedback, comments, review status, or conversation history as the fix. This skill runs outside the Databricks workspace UI, so gather Monitor evidence by asking the user for exports, screenshots, or reviewable conversation details.
+
+Translate feedback patterns into the existing repair levers:
+
+- Repeated negative feedback on the same source, metric view, measure, dimension, filter, join, or time pattern: classify the underlying wrong source, semantic model, filter, join, business logic, or time logic failure before choosing the fix.
+- Review requests (`Fix it`, `Request review`) with missing SQL, wrong SQL, failed SQL, or unsupported final answers: inspect the generated SQL/error and route to the smallest structured surface that would prevent the same failure.
+- User comments that explain a business term, synonym, category label, KPI definition, fiscal period, or expected result shape: treat the comment as business-intent evidence and encode the durable rule in metadata, metric view semantics, prompt matching, snippets, representative examples, or short global instructions.
+- High negative-feedback volume with weak or missing benchmark coverage: recommend benchmark repair or additions before benchmark-driven tuning, and use feedback clusters to choose representative benchmark candidates.
+- Feedback that contradicts passing benchmark results: check whether benchmarks are stale, too narrow, too easy, or failing to cover real user phrasing before trusting the benchmark signal.
+- Privacy rule: when conversations are private or Monitor details are unavailable, use only visible prompt, status, rating, timestamp, and trend metadata; do not use Genie conversation APIs or audit logs to recover hidden content; lower confidence and state the limitation.
+
+## Conflict Resolution And Precedence
+
+Databricks does not publicly document a strict "surface X overrides surface Y" order for Genie Spaces at query time, so do not tell the user that one surface is guaranteed to win. Conflicting guidance resolves through three documented mechanisms; use them to explain the observed symptom and to choose the repair surface.
+
+1. **Bindingness spectrum** — how reliably Genie obeys a surface, strongest to weakest:
+   - SQL functions / trusted assets: return a verified answer; when the exact text of a parameterized query is used, Genie answers deterministically from it.
+   - SQL snippets/expressions: Genie applies the logic exactly as written when it selects the expression, rather than interpreting natural language.
+   - Example SQL queries: on a close match Genie may use the query directly; on a similar question it learns from it.
+   - Table/column descriptions and metric view metadata: relevance-selected context, not a rule.
+   - Text instructions: soft, interpreted, global, and able to be ignored (Genie ignoring instructions is a documented failure mode).
+
+   This is an authoring and reliability order, not a guaranteed runtime override — which is why the routing order prefers structured surfaces.
+2. **Relevance selection** — Genie selects the most relevant context, example, and values for each prompt. A more specific, better-matching surface effectively wins because it is selected, not because of a fixed priority, so a conflict can surface as Genie choosing the other source or example.
+3. **Context budgets and crowding** — a Space allows 100 instructions (each example SQL query, each SQL function, and the entire text-instructions block each count as one) and 200 knowledge-store snippets (table descriptions, join relationships, and SQL expressions share this). Too many instructions reduce effectiveness, especially in long conversations. An overloaded surface can dilute or crowd out the guidance that should have applied, so a conflict can manifest as the correct rule being ignored.
+
+When diagnosing a conflict, name which mechanism explains the symptom — a different surface was selected, a soft text instruction was ignored or diluted, the exact-text trusted-asset path was missed, or budget crowding — then recommend moving the rule to the most reliable surface that resolves it. When you cannot tell which surface Genie actually used, lower confidence and inspect the generated SQL.
 
 ## Prompt Matching Constraints
 
@@ -94,6 +142,7 @@ Symptoms:
 - Genie selects a similarly named but incorrect data source, metric view, table, view, column, measure, or dimension.
 - Genie uses a raw table when a governed metric view should answer the question, or uses a metric view when the question needs raw detail rows.
 - Generated SQL omits a required dimension, date, status, amount, or identifier.
+- Generated SQL, instructions, metadata, or examples reference tables, views, or columns that are not attached to the Space (out-of-space references). Genie can query beyond attached assets when prompted or when metadata points outside the Space.
 - The user says Genie "does not know which source or field to use."
 
 Likely causes:
@@ -111,6 +160,7 @@ Recommended fixes:
 
 - Refine metric view descriptions and agent metadata when a governed metric is implicated.
 - Clarify or reduce overlap between raw sources and metric views that represent the same business concepts.
+- Remove or correct out-of-space references in instructions, metadata, and examples.
 - Add or refine table and column descriptions.
 - Add user-facing synonyms to key business columns.
 - Hide irrelevant IDs, ingestion fields, audit timestamps, or duplicate columns with `exclude: true`.
@@ -345,6 +395,62 @@ Recommended fixes:
 - Move reusable measures and filters into SQL snippets.
 - Move trusted complex logic into SQL functions when examples and snippets are insufficient.
 - Keep only concise global conventions in `instructions.text_instructions`.
+
+Use `Conflict Resolution And Precedence` above to explain which mechanism (bindingness, relevance selection, or budget crowding) produced the symptom.
+
+### Generation Latency Or Context Overload
+
+Symptoms:
+
+- Users complain chat or Agent-mode responses are too slow for simple questions.
+- SQL execution is fast but Genie spends a long time thinking before SQL appears.
+- Agent mode reasons for too long on a deterministic lookup or aggregation question.
+- Generated SQL or answer text is exceptionally long; long conversations get slower or time out during the thinking phase.
+
+Likely causes:
+
+- too many or overlapping data sources, raw tables exposed alongside metric views for the same business concepts
+- noisy columns left visible
+- long source-specific text instructions
+- redundant or oversized example SQL
+- broad prompt matching or entity matching on columns that do not help common questions
+- too many SQL functions in context, token-limit pressure, long chat history
+- complex examples that teach verbose SQL for simple questions
+
+Recommended fixes (hand off to `optimize-genie-space` for implementation):
+
+- Reduce attached sources to a focused set, ideally 5 or fewer initially and within the documented 30 table/view limit; split broad spaces by domain when needed.
+- Prefer metric views, pre-joined views, or materialized views for repeated business questions.
+- Hide noisy columns with `exclude`.
+- Move metric, filter, and join logic out of text instructions into metric view semantics, snippets, join specs, or representative examples.
+- Keep text instructions short, global, and non-overlapping; prune redundant or excessively long example SQL.
+- Recommend starting a new chat when long conversation history is likely influencing generation.
+
+Avoid:
+
+- optimizing warehouse size, table layout, or generated SQL when Query History shows runtime is not the bottleneck
+- adding broad text instructions such as "be faster"
+- adding more examples before pruning redundant context
+- treating Agent-mode latency on simple questions as a SQL performance problem without validating standard chat or trusted assets
+
+### Permission, Governance, Or Data Visibility Limitation
+
+Symptoms:
+
+- Empty or "no data" answers.
+- The same question returns different results for different users.
+- Rows or columns appear missing; results look filtered or masked.
+- Users report they cannot see data they expect.
+
+Likely causes:
+
+- Space ACLs or insufficient user `SELECT` privileges.
+- Row filters, column masks, or dynamic views applied to attached sources; end-user permissions applied at query time.
+
+Recommended fixes:
+
+- This is usually not a tuning problem. Confirm the governance model (ACLs, grants, row filters, column masks, dynamic views), state which limitation applies, and route data-access remediation to the workspace or governance owner rather than Space tuning.
+- Lower confidence and name the smallest check (for example, comparing results across users or inspecting grants) when the split is unverified.
 
 ## SQL Function Escalation
 

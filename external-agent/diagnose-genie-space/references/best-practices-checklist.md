@@ -12,19 +12,21 @@ Evaluate each item against the serialized space JSON. For each item, determine:
 
 Provide a brief explanation for each assessment and, for any fail/warning, give a specific actionable fix referencing actual table names, column names, or instruction text from the space.
 
-When recommending fixes, route them to the most structured Genie config surface that can represent the behavior:
-
-1. data source scope and descriptions across tables, views, and metric views
-2. metric view measures, dimensions, filters, joins, time dimensions, and agent metadata for governed metrics
-3. table/column metadata and synonyms for raw table-backed questions
-4. format assistance and entity matching for categorical values
-5. join specs for raw tables exposed directly to Genie
-6. SQL snippets for reusable filters, expressions, and measures not already governed by metric views
-7. representative example SQL for complex patterns
-8. SQL functions for trusted complex logic that cannot be captured with SQL expressions or static/parameterized examples
-9. text instructions only for concise global conventions
+When recommending fixes, route them to the most structured Genie config surface that can represent the behavior, using the routing order in `tuning-diagnosis.md` (the fix-routing authority for this skill).
 
 **Version detection:** First check `serialized_space.version`. If `2`, use v2 field names (`enable_format_assistance`, `enable_entity_matching`). If `1`, use v1 field names (`get_example_values`, `build_value_dictionary`). Do not mix v1 and v2 fields — v2 spaces reject v1 fields and vice versa.
+
+## No-Query Diagnosis Mode
+
+Continue diagnosis when bounded read-only SQL is unavailable; do not treat missing query access as a blocker. State which evidence was reviewed: Space config, generated SQL, final response, Monitor trends, comments, benchmarks, Query History, Unity Catalog metadata, or none.
+
+Confidence levels (canonical definitions; other files reference these):
+
+- `High`: config evidence directly explains the issue and no data validation is needed.
+- `Medium`: config evidence strongly suggests the issue but result-level validation, value profiling, cardinality checks, or Query History timing is missing.
+- `Low`: the likely fix depends on data values, row counts, join cardinality, freshness, permissions, or runtime behavior that cannot be inspected.
+
+Recommend the narrowest validation that would increase confidence, such as one `EXPLAIN`, one generated-SQL review, Query History timing, a metric view definition review, or user confirmation of business intent.
 
 ---
 
@@ -49,6 +51,12 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Why: Metric views should be the governed semantic surface for reusable business metrics. Exposing both a metric view and its raw source tables can make Genie choose the wrong source or reimplement governed logic inconsistently.
 - Warning if: Raw tables/views and metric views overlap on the same intended questions without clear descriptions or source-scoping guidance
 - NA if: The space is metric-view-only or table/view-only, or the mixed sources cover distinct domains
+
+**Out-Of-Space References**
+- Check: Whether instructions, metadata, examples, snippets, or generated SQL reference tables, views, or columns that are not attached to the Space
+- Why: Genie can query beyond attached assets when prompted or when metadata points outside the Space; dangling references cause wrong-source and missing-data failures.
+- Warning if: Any config surface or observed generated SQL references objects not present in `data_sources`
+- Route to: `Wrong Data Source, Metric View, Or Field` or `Instruction Conflict Or Overload` in `tuning-diagnosis.md`
 
 ### Tables And Views
 
@@ -223,7 +231,7 @@ When recommending fixes, route them to the most structured Genie config surface 
 
 **At Least 30 Diverse Q&A Pairs For Optimization Readiness**
 - Check: `serialized_space.benchmarks.questions` array length and diversity
-- Why: Benchmarks validate that Genie produces correct SQL. Diverse coverage catches regressions across different question types.
+- Why: Benchmarks validate that Genie produces correct SQL. Diverse coverage catches regressions across different question types. (The 30-question bar is a skill convention; the full sufficiency rule and remediation flow live in `optimize-genie-space`.)
 - Fail if: Fewer than 10 benchmark questions
 - Warning if: 10-29 benchmark questions, or questions cluster around a single topic or table
 - Pass if: 30+ valid-looking SQL Q&A pairs with diverse coverage
@@ -238,6 +246,37 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Check: Each benchmark question has exactly one `answer` with `format: "SQL"`
 - Why: Benchmark evals and accuracy comparison require stable SQL ground truth
 - Fail if: Any benchmark question has no SQL answer, multiple answers, or a non-SQL answer
+
+**No Benchmark Leakage**
+- Check: Sample questions, snippets, and example SQLs compared with benchmark questions, benchmark answer SQL, and evaluation notes
+- Why: Benchmarks should evaluate generalization, not teach the exact answer through config surfaces.
+- Canonical rule (referenced by other files): never copy benchmark questions, benchmark answer SQL, or evaluation-note wording into sample questions, SQL snippets, example SQL, or any other config surface. Representative examples teach reusable patterns; they do not memorize benchmarks or failing questions.
+- Fail if: Example SQL copies benchmark answer SQL or benchmark question text
+- Warning if: Sample questions duplicate benchmark questions verbatim
+
+---
+
+## Permissions, Governance, And Data Visibility
+
+**Governance Restrictions That Mimic Quality Failures**
+- Check: Space ACLs, per-user `SELECT` privileges, row filters, column masks, and dynamic views on attached sources, when inspectable
+- Why: Empty responses, per-user discrepancies, or "no data" answers can look like wrong-source or wrong-filter failures but are data-access limitations.
+- Warning if: Attached sources have row filters, column masks, or dynamic-view security and users report empty, filtered, or per-user-inconsistent answers
+- Route to: `Permission, Governance, Or Data Visibility Limitation` in `tuning-diagnosis.md`; remediation goes to the workspace or governance owner, not Space tuning
+
+---
+
+## Latency Context Pressure
+
+Static signals that inflate generation latency (detection only; routing and fixes live in `tuning-diagnosis.md` → `Generation Latency Or Context Overload`):
+
+- high data-source count, or raw/metric view overlap for the same concepts
+- noisy visible columns
+- long source-specific text instructions
+- redundant or oversized example SQL
+- broad prompt/entity matching
+- excessive SQL functions in context
+- long generated SQL or text responses
 
 ---
 

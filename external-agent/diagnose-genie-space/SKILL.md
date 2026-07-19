@@ -1,11 +1,11 @@
 ---
-name: genie-space-diagnostics
-description: "Diagnose Databricks Genie Space quality problems and produce a concrete tuning plan. Use when users ask why a Genie Space cannot answer a question consistently, gives wrong SQL, chooses wrong data sources, metric views, tables, columns, measures, dimensions, filters, or joins, or needs a configuration health check before optimization. This skill is plan-only: it may fetch/read space configuration and perform bounded read-only SQL inspection, but it must not edit serialized_space, update a Genie Space, run benchmark evals, or mutate Databricks data."
+name: diagnose-genie-space
+description: "Diagnose Databricks Genie Space quality, feedback, and response-latency problems and produce a concrete tuning plan. Use when users ask why a Genie Space cannot answer a question consistently, gives wrong SQL, chooses wrong data sources, metric views, tables, columns, measures, dimensions, filters, or joins, shows negative Monitor feedback trends, responds slowly, or needs a configuration health check before optimization. This skill is plan-only: it may fetch/read space configuration and perform bounded read-only SQL inspection, but it must not edit serialized_space, update a Genie Space, run benchmark evals, or mutate Databricks data. For versioned edits and eval loops use optimize-genie-space; for authoring a new Space use create-genie-space."
 ---
 
-# Genie Space Diagnostics
+# Diagnose Genie Space
 
-Diagnose Genie Space quality problems and produce a concrete tuning plan. The default workflow is **question-level tuning triage**: start from a failing user question, gather evidence from the serialized space and read-only data inspection, classify the likely failure mode, and recommend the smallest useful Genie configuration change.
+Diagnose Genie Space quality problems and produce a concrete tuning plan. The default workflow is **question-level tuning triage**: start from a failing user question, gather evidence from the serialized space, Monitor feedback, and read-only data inspection, classify the likely failure mode, and recommend the smallest useful Genie configuration change.
 
 This skill is plan-only. Do not edit local config files, patch Databricks, run benchmark evals, or change benchmark questions. If the user wants versioned edits, updates, eval runs, or accuracy comparison, hand off to `optimize-genie-space` after diagnosis.
 
@@ -24,16 +24,16 @@ This skill is plan-only. Do not edit local config files, patch Databricks, run b
 - Use only bounded read-only SQL inspection when live data evidence is needed.
 
 **Output behavior:**
-- Local coding agents save reports to `reports/<space_id>/` in the project root.
+- Local coding agents save reports to `reports/<space_id>/` in the user's project folder.
 - Databricks notebooks render the report in notebook output with `displayHTML()` or printed markdown.
 
-## Step 1: Establish The Tuning Case
+## Step 1: Establish The Case
 
 Ask for any missing inputs that materially affect diagnosis:
 
 - Genie Space ID, a 32-character hex string from the space URL.
 - Failing question, exactly as the user asks it.
-- Observed bad behavior: wrong data source, wrong metric view, wrong table, wrong column, wrong measure, wrong dimension, wrong time dimension, wrong filter scope, wrong grain, missing join, inconsistent answers, SQL error, empty answer, or unclear.
+- Observed bad behavior: wrong data source, wrong metric view, wrong table, wrong column, wrong measure, wrong dimension, wrong time dimension, wrong filter scope, wrong grain, missing join, inconsistent answers, SQL error, empty answer, slow response, or unclear.
 - Actual generated SQL or error text, if available.
 - Expected answer, expected SQL, or business rule if available.
 - Whether the issue is intermittent or consistently reproducible.
@@ -77,90 +77,42 @@ If fetching fails:
 
 Read only the references needed for the case:
 
-- `references/tuning-diagnosis.md` for failure classification and tuning-surface routing.
-- `references/best-practices-checklist.md` for supporting static health checks.
+- `references/tuning-diagnosis.md` for failure classification, feedback routing, latency pre-routing, conflict precedence, and tuning-surface routing.
+- `references/best-practices-checklist.md` for supporting static health checks and the confidence rubric.
 - `references/space-schema.md` when field shapes, version-specific names, or validation rules matter.
 
 ## Step 4: Inspect Evidence
 
 ### 4a: Serialized Space Evidence
 
-Use the fetched `serialized_space` to identify:
+Inventory the config surfaces implicated by the failing question using the evidence list in `references/tuning-diagnosis.md` (Evidence To Gather). Prefer concrete evidence: table names, column names, field values, instruction text, snippet names, and benchmark IDs.
 
-- candidate data sources, including tables, views, metric views, columns, measures, dimensions, and descriptions related to the failing question
-- metric view descriptions and, when available from read-only inspection, metric view sources, measures, dimensions, filters, joins, time dimensions, and agent metadata such as display names, synonyms, and formatting
-- relevant synonyms, `enable_format_assistance`, and `enable_entity_matching` flags
-- existing join specs for tables implicated by the question
-- SQL snippets for reusable measures, filters, and expressions
-- example SQLs that might help or conflict with the question pattern
-- text instructions that define global conventions or contain overly specific logic
-- benchmark questions that cover similar intent, if any
+### 4b: Feedback And Latency Evidence
 
-Prefer concrete evidence: table names, column names, field values, instruction text, snippet names, and benchmark IDs.
+When the case involves quality trends or slow responses:
 
-### 4b: Read-Only SQL Inspection
+- **Monitor feedback**: ask the user for Monitor-tab exports, screenshots, or reviewable conversation details — ratings trends, negative ratings, `Fix it` / `Request review` conversations, feedback and reviewer comments, and generated SQL or error text from reviewable conversations. When conversations are private or Monitor details are unavailable, use only visible prompt, status, rating, timestamp, and trend metadata; do not use conversation APIs or audit logs to recover hidden content. Route patterns per `references/tuning-diagnosis.md` → Feedback Routing.
+- **Latency complaints**: separate SQL-runtime latency from generation/thinking latency using the questions and Query History timing described in `references/tuning-diagnosis.md` → Latency Pre-Routing. If SQL runtime dominates and the generated SQL is correct, stop Space-quality diagnosis and route to query/warehouse follow-up outside Space configuration.
+
+### 4c: Read-Only SQL Inspection
 
 Use the DBSQL MCP, Databricks SQL, or notebook SQL cells for read-only SQL only when the serialized config is insufficient to determine the likely cause. Keep inspection targeted and bounded.
 
-Allowed SQL:
-
-- `SELECT`
-- `WITH`
-- `SHOW`
-- `DESCRIBE`
-- `EXPLAIN`
-- `information_schema` queries
-
-Not allowed:
-
-- `CREATE`, `ALTER`, `DROP`, `TRUNCATE`
-- `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `COPY INTO`
-- table/schema/data mutation of any kind
-
-Use read-only SQL for:
-
-- confirming candidate column names and data types
-- inspecting metric view definitions with `DESCRIBE TABLE EXTENDED <catalog>.<schema>.<metric_view> AS JSON`
-- checking distinct categorical values and case/format mismatches
-- checking null rates, row counts, and cardinality
-- sampling a small number of rows with explicit `LIMIT`
-- validating join keys and join grain
-- understanding metric definitions when expected SQL or business rules are provided
-- querying a metric view with `MEASURE(...)`, explicit dimensions, `GROUP BY`, and `LIMIT` to verify available grouping dimensions, filters, and metric outputs
-- checking underlying PK/FK constraints and join grain only when metric view source SQL or joins are implicated
+Allowed SQL: `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, and `information_schema` queries. Not allowed: `CREATE`, `ALTER`, `DROP`, `TRUNCATE`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `COPY INTO`, or any table/schema/data mutation.
 
 Record the SQL purpose and findings in the report. Do not include broad exploratory dumps.
 
 ## Step 5: Classify The Failure
 
-Choose one primary failure class, plus secondary contributors if needed:
+Choose one primary failure class, plus secondary contributors if needed, using the failure classes in `references/tuning-diagnosis.md`: wrong data source / metric view / field, wrong metric view measure or dimension, wrong metric view scope / time dimension / grain, wrong filter value, wrong join, metric or business logic error, time logic error, result shape error, instruction conflict or overload, generation latency or context overload, permission / governance / data visibility limitation, or unknown from static evidence (state exactly what additional result SQL, expected SQL, or eval report is needed).
 
-- **Wrong data source, metric view, or field**: Genie selects a similarly named but incorrect source, metric view, table, column, measure, or dimension.
-- **Wrong metric view measure or dimension**: Genie uses the wrong governed metric, grouping dimension, display name, synonym, or metric-view field.
-- **Wrong metric view scope, time dimension, or grain**: Genie misses a persistent metric-view filter, uses the wrong date/time dimension, or aggregates at an invalid grain.
-- **Wrong filter value**: Genie uses a label, code, casing, date boundary, or categorical value that does not match stored data.
-- **Wrong join**: Genie misses a table, joins through the wrong key, or changes grain/cardinality.
-- **Metric or business logic error**: Genie calculates the wrong numerator, denominator, aggregation, ratio, or reusable business concept.
-- **Time logic error**: Genie uses the wrong period, boundary, date grain, fiscal convention, or rolling-window logic.
-- **Result shape error**: Genie returns the right concept with wrong columns, aliases, granularity, ranking, ordering, or limit.
-- **Instruction conflict or overload**: text instructions, examples, snippets, or benchmark SQL conflict or dilute the intended behavior.
-- **Insufficient benchmark coverage**: no benchmark or only weak benchmark coverage for the question pattern.
-- **Unknown from static evidence**: evidence is insufficient; state exactly what additional result SQL, expected SQL, or eval report is needed.
+For conflicting or ignored guidance, name the precedence mechanism (bindingness, relevance selection, or budget crowding) per `references/tuning-diagnosis.md` → Conflict Resolution And Precedence. Assign High / Medium / Low confidence using the canonical rubric in `references/best-practices-checklist.md` → No-Query Diagnosis Mode.
 
 ## Step 6: Recommend Tuning Changes
 
-Recommend the smallest structured Genie configuration change that addresses the failure. Use this routing order:
+Recommend the smallest structured Genie configuration change that addresses the failure, using the routing order in `references/tuning-diagnosis.md` (structured surfaces first, text instructions last).
 
-1. Data source descriptions and scope for source-selection ambiguity, including metric view versus raw table overlap.
-2. Metric view modeling and agent metadata for governed metrics: measures, dimensions, filters, joins, time dimensions, display names, synonyms, formats, and comments.
-3. Table or column descriptions, synonyms, and hidden columns for raw table/column ambiguity.
-4. `enable_format_assistance` and `enable_entity_matching` for categorical value, formatting, or stored-value mismatch.
-5. `instructions.join_specs` for missing or incorrect joins between raw tables exposed directly to Genie.
-6. `instructions.sql_snippets` for reusable measures, filters, dimensions, and business expressions that are not already governed by a metric view.
-7. `instructions.example_question_sqls` for representative complex patterns, multi-step logic, ranking, windows, or result shape after structured metadata and metric view modeling are insufficient.
-8. `instructions.text_instructions` only for concise global conventions that cannot be encoded structurally.
-
-Do not recommend copying the failing question or benchmark answer verbatim into example SQL. Example SQL should teach a representative pattern, not memorize a test.
+Never recommend copying benchmark questions, benchmark answer SQL, or evaluation notes into sample questions, snippets, example SQL, or any other config surface (benchmark leakage). Example SQL should teach a representative pattern, not memorize a test.
 
 For every recommended change, include:
 
@@ -172,19 +124,7 @@ For every recommended change, include:
 
 ## Step 7: Run Static Space Health Checks
 
-Use `references/best-practices-checklist.md` as supporting evidence after the question-level diagnosis. Evaluate the health checks most relevant to the failure first, then summarize broader issues:
-
-- data source scope and metadata across tables, views, and metric views
-- metric view descriptions, semantic coverage, agent metadata, persistent filter documentation, and time modeling
-- column descriptions, synonyms, format assistance, entity matching, and hidden noisy columns
-- text instruction focus
-- example SQL coverage and diversity
-- join specs and comments
-- SQL snippets for reusable filters, expressions, and measures
-- benchmark count, static answer shape, and pattern coverage
-- sample question quality
-
-Do not let a generic checklist item outrank a concrete finding about the failing question.
+Use `references/best-practices-checklist.md` as supporting evidence after the question-level diagnosis. Evaluate the health checks most relevant to the failure first, then summarize broader issues. Do not let a generic checklist item outrank a concrete finding about the failing question.
 
 ## Step 8: Generate Diagnostics Report
 
@@ -208,11 +148,17 @@ Present the report in this format:
 | Primary failure class | ... |
 | Secondary contributors | ... |
 | Likely root cause | ... |
-| Confidence | High / Medium / Low |
+| Confidence | High / Medium / Low (rubric: best-practices-checklist.md) |
 
 ## Evidence From Serialized Space
 
 - ...
+
+## Feedback And Latency Evidence
+
+- Monitor trends / reviewable conversations inspected: Yes / No / Unavailable
+- Latency split (generation vs SQL runtime), if applicable: ...
+- Privacy limitations: ...
 
 ## Read-Only Inspection Notes
 
@@ -249,23 +195,24 @@ Rank by expected impact on the failing question.
 | Criterion | Status | Details |
 |-----------|--------|---------|
 | Benchmarks exist | pass/fail | X benchmark questions found |
-| Benchmark count | pass/fail/warning | X questions; 30+ valid Q/A pairs recommended before benchmark-driven tuning |
+| Benchmark count | pass/fail/warning | X questions; 30+ valid Q/A pairs recommended before benchmark-driven tuning (skill convention) |
 | Benchmark answer shape | pass/fail/warning | X questions have exactly one SQL answer |
 | Benchmark diversity | pass/warning | Coverage across data sources, metric views, measures, dimensions, joins, filters, time logic, and result shapes |
 | Critical static failures resolved | pass/warning | X issues should be addressed before optimization |
 
 **Verdict:** Ready / Needs Work / Not Ready
 
-## Handoff To Optimization
+## Handoff
 
-- Recommended next skill: `optimize-genie-space` when the user is ready to make versioned config edits, update the space, run evals, and compare accuracy.
-- Suggested first optimization task: ...
+- For versioned edits, eval runs, and accuracy comparison: `optimize-genie-space`. Suggested first optimization task: ...
+- For SQL-runtime-dominated latency with correct generated SQL: query/warehouse follow-up outside Space configuration (for example a query-optimization skill when available).
+- For wrong or missing Metric View definitions: upstream semantic-layer fix (for example a metric-view authoring skill when available).
 ```
 
 ## Step 9: Save Report
 
 **Claude Code / local coding agents:**
-1. Create `reports/<space_id>/` in the user's project root if needed.
+1. Create `reports/<space_id>/` in the user's project folder if needed.
 2. Save the raw config to `reports/<space_id>/space-config.json`.
 3. Save the diagnostics markdown to `reports/<space_id>/diagnostics-report.md`.
 4. Tell the user the saved paths and the highest-impact recommended tuning change.
