@@ -13,16 +13,7 @@ Use this when analyzing benchmark reports and proposing edits to `serialized_spa
 
 ## Core Principle
 
-Tune the controllable context around Genie, then re-run benchmarks. Prefer structured, SQL-grounded context over broad text instructions.
-
-Recommended priority:
-
-1. Data scope and metadata
-2. Prompt matching on categorical values
-3. Join relationships
-4. SQL expressions for reusable business logic
-5. Example SQL for complex query patterns
-6. Text instructions only for global behavior that cannot be encoded above
+Tune the controllable context around Genie, then re-run benchmarks. Prefer structured, SQL-grounded context over broad text instructions; the Failure-to-Lever Routing table below operationalizes that priority for each failure pattern.
 
 Benchmarks evaluate quality but do not teach Genie by themselves. To improve quality, translate failed benchmark evidence into metadata, join specs, SQL snippets, example SQL, or focused text instructions.
 
@@ -237,30 +228,11 @@ Keep each section user-eye friendly: use short bullets, avoid dense paragraphs, 
 
 Before the first optimization pass, review benchmark quality and record findings in `fix_plan/genie_<version>_quality_improvement_plan.md`. Do this before interpreting baseline accuracy or proposing Genie config edits.
 
-Minimum benchmark bar:
+The sufficiency minimum, valid-denominator rules, difficulty rubric, coverage review, and repair/pruning flows are defined in `references/evals-and-reports.md` (Benchmark Sufficiency And Valid Denominator, Benchmark Repair, Benchmark Pruning); apply them here instead of re-deriving thresholds. Key workflow constraints restated:
 
-- Require at least 30 valid benchmark question/answer pairs. A pair is valid only when the question has exactly one SQL answer and there is no evidence that the answer SQL is invalid or errors during evaluation or read-only verification.
-- If fewer than 30 valid Q/A pairs remain, pause config tuning. Document the count, invalid or missing-answer question IDs, and the benchmark expansion or correction needed.
-- After documenting the gap, author enough benchmark Q/A additions or replacements to bring the reviewed valid set to at least 30. Use the available dataset, existing space config, and read-only Databricks SQL inspection to ground the questions and SQL.
-- Put the benchmark additions or replacements into a dedicated benchmark bootstrap or repair config version under `genie_configs/`. Do not combine this with Genie tuning changes.
+- If the valid set is insufficient or the benchmark is oversized and redundant, pause config tuning and document the count, invalid or missing-answer question IDs, and the benchmark expansion, correction, or pruning needed.
+- Put benchmark additions, replacements, or pruning into a dedicated benchmark config version under `genie_configs/`. Do not combine with Genie tuning changes.
 - Validate the benchmark config with `validate-config --previous-config <previous> --allow-benchmark-changes`, update the Genie space, run a full benchmark eval, and pull a versioned report before starting config tuning.
-
-Review diversity and challenge:
-
-- Cover multiple entities, metrics, dimensions, filters, joins, time windows, aggregation grains, ranking/window patterns, and business concepts that real users will ask about.
-- Flag overly simple questions such as trivial counts, direct lookups, single-table summaries with no business logic, and repeated variants that only swap a date or category.
-- Flag low diversity when questions cluster around the same table, metric, phrasing, join path, filter type, or SQL pattern.
-- Prefer a benchmark mix that includes reusable business metrics, categorical value handling, multi-table joins, date range and rolling-window logic, conditional aggregation, ratios, top-N/ranking, and result-shape expectations.
-- If the benchmark is too simple or not diverse, document weak coverage areas and specific missing categories. Add or replace benchmark Q/A pairs in a dedicated benchmark bootstrap or repair config version before proceeding to config tuning.
-
-Benchmark Q/A additions or replacements should include:
-
-- the benchmark question text
-- the expected SQL answer
-- the coverage category, such as join, time logic, metric, filter, ranking/windowing, or result shape
-- the tables, metric views, and columns used
-- validation notes showing the SQL was checked with read-only inspection when possible
-- whether it is an addition or a replacement for an invalid, too-simple, or duplicate existing question
 
 ## Failure-To-Fix Guide
 
@@ -295,20 +267,7 @@ Fixes:
 - Add synonyms or a SQL filter snippet for common business terms.
 - Refresh prompt matching values in the UI when values changed.
 
-Good entity-matching candidates in this repo:
-
-- `status`
-- `region`
-- `state`
-- `channel`
-- `category`
-- `transaction_type`
-- `merchant_category`
-- `account_type`
-- `relationship_tier`
-- `product_category`
-- `product_type`
-- `reward_program`
+Good entity-matching candidates are low/medium-cardinality string columns that users naturally name in questions, such as status, type, category, region, channel, segment, or lifecycle fields. Profile the column's distinct values first and confirm the values are safe to share in shared Space context before enabling matching.
 
 Avoid entity matching for high-cardinality free-text or identifier columns unless users naturally filter by those exact values.
 
@@ -327,16 +286,7 @@ Fixes:
 - Add example SQL for common multi-table patterns.
 - If joins are consistently complex, document whether an upstream pre-joined view or metric view should be created, then keep this workflow to serialized-space edits.
 
-For this banking space, likely standard joins include:
-
-- `accounts.customer_id = customers.customer_id`
-- `accounts.product_id = products.product_id`
-- `transactions.account_id = accounts.account_id`
-- `transactions.customer_id = customers.customer_id`
-- `transactions.branch_id = branches.branch_id`
-- `service_requests.customer_id = customers.customer_id`
-- `service_requests.branch_id = branches.branch_id`
-- `customers.primary_branch_id = branches.branch_id`
+Derive candidate join specs from declared PK/FK constraints, naming conventions (`<entity>_id` foreign keys), and the failing questions' expected SQL; validate keys and grain with read-only checks before encoding them.
 
 ### Metric Or Business Logic Error
 
@@ -356,18 +306,7 @@ Fixes:
 - For table-backed spaces, document an upstream view or metric view opportunity for highly reused metrics.
 - Keep expression names and synonyms close to user phrasing.
 
-Good SQL-expression candidates from the benchmark set:
-
-- deposit volume
-- net flow
-- digital transaction share
-- mobile transaction share
-- complaint count and complaint rate
-- fee revenue
-- credit card penetration
-- delinquency rate
-- credit card utilization
-- payment-to-purchase ratio
+Good SQL-expression candidates are reusable business concepts that recur across failing and passing questions: ratios and rates, shares of a total, net/derived amounts, conditional counts, and period-over-period measures. Mine the benchmark set and real user phrasing for these, then express the concept once as a snippet rather than per-question.
 
 ### Time Logic Error
 

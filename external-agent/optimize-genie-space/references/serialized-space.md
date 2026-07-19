@@ -33,13 +33,13 @@ jq empty genie_configs/<space_id>_vtest.json
 Create a request body:
 
 ```bash
-CONFIG=genie_configs/<space_id>_vtest.json
+CONFIG=genie_configs/<space_id>_v<version>.json
 REQUEST=/tmp/genie_create_space.json
 
 jq -n \
-  --arg title "Banking Analytics Genie" \
-  --arg parent_path "/Users/david.huang@databricks.com" \
-  --arg warehouse_id "ca59d582b04a6c28" \
+  --arg title "<Space Title>" \
+  --arg parent_path "/Workspace/Users/<username>" \
+  --arg warehouse_id "<warehouse_id>" \
   --rawfile serialized_space "$CONFIG" \
   '{
     title: $title,
@@ -52,7 +52,7 @@ jq -n \
 Update a request body:
 
 ```bash
-CONFIG=genie_configs/<space_id>_vtest.json
+CONFIG=genie_configs/<space_id>_v<version>.json
 REQUEST=/tmp/genie_update_space.json
 
 jq -n \
@@ -65,15 +65,17 @@ jq -n \
 Create a new Genie space:
 
 ```bash
-databricks api post /api/2.0/genie/spaces -p fevm-test --json @/tmp/genie_create_space.json -o json
+databricks api post /api/2.0/genie/spaces --json @/tmp/genie_create_space.json -o json
 ```
 
 Update an existing Genie space:
 
 ```bash
-SPACE_ID=01f14e0e9d9a1f548b182a2f82341992
-databricks api patch "/api/2.0/genie/spaces/${SPACE_ID}" -p fevm-test --json @/tmp/genie_update_space.json -o json
+SPACE_ID=<space_id>
+databricks api patch "/api/2.0/genie/spaces/${SPACE_ID}" --json @/tmp/genie_update_space.json -o json
 ```
+
+Add `-p <profile>` to any CLI command when the user has specified a non-default profile.
 
 ## Schema Checklist
 
@@ -89,6 +91,8 @@ Top-level fields:
 - `instructions.join_specs`: predefined joins.
 - `instructions.sql_snippets`: reusable filters, expressions, and measures.
 - `benchmarks.questions`: evaluation questions with SQL ground truth.
+
+Documented capacity limits to keep edits within: up to 30 tables/views (data sources total), 100 instructions (example SQL queries + SQL functions + text instructions), 200 knowledge-store snippets (table descriptions, join relationships, and SQL expressions), entity matching on up to 120 columns, and 500 benchmark questions per Space.
 
 Validation rules that commonly break updates:
 

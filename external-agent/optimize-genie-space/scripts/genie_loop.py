@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Helpers for repo-local Databricks Genie config and benchmark loops."""
+"""Helpers for local Databricks Genie config and benchmark loops.
+
+Authentication uses the Databricks CLI. Pass --profile explicitly, or omit it
+to use the CLI's configured default profile (e.g. DEFAULT in ~/.databrickscfg
+or DATABRICKS_CONFIG_PROFILE).
+"""
 
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-DEFAULT_PROFILE = "fevm-test"
+DEFAULT_PROFILE: str | None = None
 DEFAULT_EVAL_POLL_INTERVAL_SECONDS = 60
 DEFAULT_EVAL_WAIT_TIMEOUT_SECONDS = 3600
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -115,6 +120,11 @@ def iter_objects_with_id(value: Any, path: tuple[Any, ...] = ()) -> Any:
     elif isinstance(value, list):
         for index, child in enumerate(value):
             yield from iter_objects_with_id(child, path + (index,))
+
+
+def profile_args(profile: str | None) -> list[str]:
+    """CLI profile flags; empty when unset so the CLI default profile applies."""
+    return ["-p", profile] if profile else []
 
 
 def validate_version_name(version: str) -> None:
@@ -386,8 +396,7 @@ def cmd_save_config(args: argparse.Namespace) -> None:
             "api",
             "get",
             f"/api/2.0/genie/spaces/{args.space_id}?include_serialized_space=true",
-            "-p",
-            args.profile,
+            *profile_args(args.profile),
             "-o",
             "json",
         ]
@@ -461,8 +470,7 @@ def cmd_update_space(args: argparse.Namespace) -> None:
                 "api",
                 "patch",
                 f"/api/2.0/genie/spaces/{args.space_id}",
-                "-p",
-                args.profile,
+                *profile_args(args.profile),
                 "--json",
                 f"@{request_path}",
                 "-o",
@@ -479,8 +487,7 @@ def cmd_create_eval_run(args: argparse.Namespace) -> None:
         "genie",
         "genie-create-eval-run",
         args.space_id,
-        "-p",
-        args.profile,
+        *profile_args(args.profile),
         "-o",
         "json",
     ]
@@ -508,14 +515,13 @@ def eval_results_from_response(response: Any) -> list[dict[str, Any]]:
     return [item for item in as_list(values) if isinstance(item, dict)]
 
 
-def list_eval_results(space_id: str, eval_run_id: str, profile: str) -> Any:
+def list_eval_results(space_id: str, eval_run_id: str, profile: str | None) -> Any:
     command = [
         "genie",
         "genie-list-eval-results",
         space_id,
         eval_run_id,
-        "-p",
-        profile,
+        *profile_args(profile),
         "--page-size",
         "100",
         "-o",
@@ -549,15 +555,14 @@ def list_eval_results(space_id: str, eval_run_id: str, profile: str) -> Any:
     return all_results
 
 
-def get_eval_run(space_id: str, eval_run_id: str, profile: str) -> dict[str, Any]:
+def get_eval_run(space_id: str, eval_run_id: str, profile: str | None) -> dict[str, Any]:
     response = run_cli_json(
         [
             "genie",
             "genie-get-eval-run",
             space_id,
             eval_run_id,
-            "-p",
-            profile,
+            *profile_args(profile),
             "-o",
             "json",
         ]
@@ -820,14 +825,18 @@ def cmd_compare_reports(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Repo-local helpers for Databricks Genie config, eval, and report loops."
+        description="Helpers for Databricks Genie config, eval, and report loops."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     save = subparsers.add_parser("save-config", help="Fetch and save decoded serialized_space JSON.")
     save.add_argument("--space-id", required=True)
     save.add_argument("--version", required=True)
-    save.add_argument("--profile", default=DEFAULT_PROFILE)
+    save.add_argument(
+            "--profile",
+            default=DEFAULT_PROFILE,
+            help="Databricks CLI profile. Omit to use the CLI default profile.",
+        )
     save.add_argument("--config-dir", default="genie_configs")
     save.set_defaults(func=cmd_save_config)
 
@@ -844,12 +853,20 @@ def build_parser() -> argparse.ArgumentParser:
     update = subparsers.add_parser("update-space", help="Validate and patch a Genie space with local config.")
     update.add_argument("--space-id", required=True)
     update.add_argument("--config", required=True)
-    update.add_argument("--profile", default=DEFAULT_PROFILE)
+    update.add_argument(
+            "--profile",
+            default=DEFAULT_PROFILE,
+            help="Databricks CLI profile. Omit to use the CLI default profile.",
+        )
     update.set_defaults(func=cmd_update_space)
 
     eval_run = subparsers.add_parser("create-eval-run", help="Create a Genie benchmark eval run.")
     eval_run.add_argument("--space-id", required=True)
-    eval_run.add_argument("--profile", default=DEFAULT_PROFILE)
+    eval_run.add_argument(
+            "--profile",
+            default=DEFAULT_PROFILE,
+            help="Databricks CLI profile. Omit to use the CLI default profile.",
+        )
     eval_run.add_argument(
         "--benchmark-question-id",
         action="append",
@@ -861,7 +878,11 @@ def build_parser() -> argparse.ArgumentParser:
     pull.add_argument("--space-id", required=True)
     pull.add_argument("--eval-run-id", required=True)
     pull.add_argument("--version", required=True)
-    pull.add_argument("--profile", default=DEFAULT_PROFILE)
+    pull.add_argument(
+            "--profile",
+            default=DEFAULT_PROFILE,
+            help="Databricks CLI profile. Omit to use the CLI default profile.",
+        )
     pull.add_argument("--results-dir", default="results")
     pull.add_argument(
         "--no-wait",
