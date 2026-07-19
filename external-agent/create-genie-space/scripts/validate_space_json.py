@@ -24,6 +24,8 @@ V2_COLUMN_FIELDS = {"enable_format_assistance", "enable_entity_matching"}
 MAX_DATA_SOURCES = 30
 MAX_INSTRUCTION_OBJECTS = 100
 MAX_ENTITY_MATCHING_COLUMNS = 120
+MAX_KNOWLEDGE_STORE_SNIPPETS = 200
+MAX_BENCHMARK_QUESTIONS = 500
 MAX_TEXT_INSTRUCTION_CHARS = 2000
 SUMMARY_INSTRUCTION_HEADER = "Instructions you must follow when providing summaries"
 CANONICAL_GSL_HEADERS = [
@@ -419,6 +421,22 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
             f"keep total instructions at or below {MAX_INSTRUCTION_OBJECTS}"
         )
 
+    # Knowledge-store snippets: table/Metric View descriptions + join
+    # relationships + SQL expressions share one documented budget.
+    described_sources = sum(
+        1
+        for source in tables + metric_views
+        if joined_text(as_dict(source).get("description")).strip()
+    )
+    sql_snippet_count = sum(len(as_list(group)) for group in snippets.values())
+    knowledge_store_count = described_sources + len(join_specs) + sql_snippet_count
+    if knowledge_store_count > MAX_KNOWLEDGE_STORE_SNIPPETS:
+        warnings.append(
+            f"knowledge-store snippets total {knowledge_store_count} "
+            f"(descriptions + join specs + SQL snippets); "
+            f"keep at or below {MAX_KNOWLEDGE_STORE_SNIPPETS}"
+        )
+
     all_ids = [obj["id"] for _, obj in iter_objects_with_id(config) if isinstance(obj.get("id"), str)]
     check_duplicates(errors, "all serialized_space objects", all_ids)
     check_duplicates(
@@ -498,6 +516,11 @@ def validate(config: dict[str, Any]) -> tuple[list[str], list[str]]:
         warnings.append("$.benchmarks.questions has fewer than 10 questions")
     elif len(benchmark_questions) < 30:
         warnings.append("$.benchmarks.questions has fewer than 30 questions; target 30+ for optimization readiness")
+    if len(benchmark_questions) > MAX_BENCHMARK_QUESTIONS:
+        warnings.append(
+            f"$.benchmarks.questions has {len(benchmark_questions)} questions; "
+            f"Databricks supports up to {MAX_BENCHMARK_QUESTIONS} benchmark questions per space"
+        )
 
     for index, question in enumerate(benchmark_questions):
         label = f"$.benchmarks.questions[{index}]"

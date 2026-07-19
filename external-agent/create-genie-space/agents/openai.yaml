@@ -1,4 +1,0 @@
-interface:
-  display_name: "Create Genie Space"
-  short_description: "Profile data and create validated Genie spaces"
-  default_prompt: "Use $create-genie-space to profile my Unity Catalog data and create a validated Databricks Genie Space JSON."

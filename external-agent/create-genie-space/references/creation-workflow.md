@@ -273,16 +273,7 @@ Generate every `id` as a unique 32-character lowercase hex string. Sort arrays a
 
 ### Surface Routing
 
-Prefer the most structured Genie surface that can represent the behavior:
-
-1. Metric View semantic metadata for governed measures, dimensions, filters, joins, display names, synonyms, and formatting.
-2. Table/Metric View descriptions and table column descriptions/synonyms for source and column selection.
-3. Format assistance and entity matching for eligible categorical values.
-4. Join specs for raw table/table or table/view relationships.
-5. SQL snippets for reusable filters, expressions, and measures not already governed by Metric Views.
-6. Example SQL for complex query shapes, parameterized examples, windowing, ranking, cohort analysis, Metric View `MEASURE()` patterns, and mixed-source CTE patterns.
-7. SQL functions for trusted registered logic that cannot be represented by snippets or examples.
-8. Text instructions only for concise global conventions, ambiguity handling, data-quality notes, constraints, and summary behavior.
+Prefer the most structured Genie surface that can represent the behavior, using the canonical priority order in `best-practices-checklist.md` (Metric View semantic metadata first, text instructions last).
 
 ### Data Sources
 
@@ -325,15 +316,7 @@ Recommended defaults:
 
 ### Text Instructions
 
-Use at most one text instruction. Keep it short, global, and under 2,000 characters when possible.
-
-Use canonical GSL sections in this order, omitting empty sections:
-
-- `## PURPOSE`
-- `## DISAMBIGUATION`
-- `## DATA QUALITY NOTES`
-- `## CONSTRAINTS`
-- `## Instructions you must follow when providing summaries`
+Use at most one text instruction. Keep it short, global, and under 2,000 characters when possible. Format it with the canonical GSL section template in `space-schema.md` (Text Instructions), omitting empty sections.
 
 Good candidates:
 
@@ -401,10 +384,10 @@ Only include benchmark SQL that has been checked with read-only SQL execution or
 
 ## 6. Validate And Package
 
-Run:
+Run the validator, resolving `<skill-dir>` to wherever this skill is installed:
 
 ```bash
-python3 external-agent/create-genie-space/scripts/validate_space_json.py <path-to-serialized-space.json>
+python3 <skill-dir>/scripts/validate_space_json.py <path-to-serialized-space.json>
 ```
 
 Fix errors before creating an API payload. Review warnings against `best-practices-checklist.md`.

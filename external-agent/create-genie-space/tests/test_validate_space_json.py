@@ -211,6 +211,41 @@ class ValidateSpaceJsonTest(unittest.TestCase):
 
         self.assert_has(warnings, "sample_questions is empty")
 
+    def test_knowledge_store_snippet_limit_warns(self) -> None:
+        config = base_config()
+        config["instructions"]["join_specs"] = [
+            {
+                "id": hid(400 + index),
+                "sql": ["`a`.`id` = `b`.`id`", "--rt=FROM_RELATIONSHIP_TYPE_MANY_TO_ONE--"],
+                "comment": ["test join"],
+            }
+            for index in range(200)
+        ]
+
+        _errors, warnings = validate_space_json.validate(config)
+
+        self.assert_has(warnings, "knowledge-store snippets total")
+
+    def test_benchmark_question_limit_warns(self) -> None:
+        config = base_config()
+        config["benchmarks"]["questions"] = [
+            {
+                "id": hid(1000 + index),
+                "question": [f"Benchmark question {index}?"],
+                "answer": [
+                    {
+                        "format": "SQL",
+                        "content": [f"SELECT {index} AS value"],
+                    }
+                ],
+            }
+            for index in range(501)
+        ]
+
+        _errors, warnings = validate_space_json.validate(config)
+
+        self.assert_has(warnings, "up to 500 benchmark questions")
+
 
 if __name__ == "__main__":
     unittest.main()

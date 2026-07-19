@@ -137,7 +137,7 @@ Guidance that shapes how Genie interprets questions and generates SQL.
 | `text_instructions[].id` | string | 32-char lowercase hex identifier |
 | `text_instructions[].content` | array of strings | The instruction text segments |
 
-Use at most one text instruction. Keep it concise and use canonical Markdown sections in this order, omitting empty sections:
+Use at most one text instruction. Keep it concise and use canonical Markdown sections in this order, omitting empty sections (this is the canonical GSL section template for this skill; other files reference it):
 
 - `## PURPOSE`
 - `## DISAMBIGUATION`

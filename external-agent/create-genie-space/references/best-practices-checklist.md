@@ -12,16 +12,17 @@ Evaluate each item against the serialized space JSON. For each item, determine:
 
 Provide a brief explanation for each assessment and, for any fail/warning, give a specific actionable fix referencing actual data source names, table names, column names, Metric View names, or instruction text from the space.
 
-When recommending fixes, route them to the most structured Genie config surface that can represent the behavior:
+When recommending fixes, route them to the most structured Genie config surface that can represent the behavior. This is the canonical structured-surfaces priority order for this skill; `SKILL.md` and `creation-workflow.md` point here instead of redefining it:
 
 1. Metric View semantic metadata when a selected Metric View already owns the business metric
-2. table/column metadata and synonyms
-3. format assistance and entity matching for categorical values
-4. join specs for table/table or table/view relationships
-5. SQL snippets for reusable filters, expressions, and measures not already captured by Metric Views
-6. representative example SQL for complex patterns, including valid Metric View `MEASURE()` queries
-7. SQL functions for trusted complex logic that cannot be captured with SQL expressions or static/parameterized examples
-8. text instructions only for concise global conventions
+2. focused data source selection
+3. table/column metadata and synonyms
+4. format assistance and entity matching for eligible categorical values, after prompt matching safety review
+5. join specs for table/table or table/view relationships
+6. SQL snippets for reusable filters, expressions, and measures not already captured by Metric Views
+7. representative example SQL for complex patterns, including valid Metric View `MEASURE()` queries
+8. SQL functions for trusted complex logic that cannot be captured with SQL expressions or static/parameterized examples
+9. text instructions only for concise global conventions
 
 **Version detection:** First check `serialized_space.version`. If `2`, use v2 field names (`enable_format_assistance`, `enable_entity_matching`). If `1`, use v1 field names (`get_example_values`, `build_value_dictionary`). Do not mix v1 and v2 fields — v2 spaces reject v1 fields and vice versa.
 
@@ -38,6 +39,11 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Why: Too many data objects increase ambiguity and response latency. Start small and expand as needed. Databricks currently supports up to 30 tables or views in a Genie Space, and Metric Views are the preferred simplification layer when metrics/dimensions are already modeled.
 - Fail if: No tables, views, or Metric Views are configured, or total data objects exceed 30
 - Warning if: Total data objects exceed 10
+
+**Upstream Denormalization Over Many Raw Tables**
+- Check: Whether a focused design would need more than ~5 sources, approach the 30-table/view limit, or depend on ambiguous multi-hop joins
+- Why: Pre-joining or denormalizing upstream into a curated view or Metric View is the primary strategy for both the table limit and accuracy; attaching many raw tables leaves Genie to recover join paths at query time.
+- Warning if: The draft attaches many raw tables where an upstream pre-joined view or Metric View would be cleaner. This skill does not create Metric Views: document the semantic-model gap and recommend authoring the Metric View upstream (for example with a metric-view authoring skill when available).
 
 **Focused Data Object Selection**
 - Check: Whether tables, views, and Metric Views appear relevant to the space's stated purpose (`title`, `description`)
@@ -57,6 +63,7 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Fail if: Any table has no description or a generic/empty description
 - Good: `"description": "Daily sales transactions with line-item details, one row per product per order"`
 - Bad: `"description": ""` or `"description": "sales table"`
+- Note: Inspect and correct AI-generated Unity Catalog table and column descriptions before trusting them; do not pass inaccurate auto-generated comments into Space context.
 
 - NA if: No tables or standard views are configured
 
@@ -88,6 +95,11 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Warning if: Eligible low/medium-cardinality string categorical columns that users filter by don't have `build_value_dictionary: true` (v1) or `enable_entity_matching: true` (v2)
 - NA if: Columns are non-string, high-cardinality free text, not naturally filtered by exact value, or ineligible because of row filters, column masks, or dynamic views
 - Note: v2 spaces reject `build_value_dictionary` — use `enable_entity_matching` instead. Entity matching requires format assistance and supports up to 120 columns, 1,024 distinct values per column, and 127 characters per value.
+
+**Prompt Matching Safety**
+- Check: Which columns have format assistance or entity matching enabled, against the sensitivity review from profiling
+- Why: Representative values for prompt matching are generated using the author's permissions and become part of the Space's shared context, visible to Space users. Values beyond the documented caps (120 columns, 1,024 distinct values per column, 127 characters per value) are not indexed, so spend the budget on the highest-signal categorical columns rather than enabling everything.
+- Fail if: Format assistance or entity matching is enabled on sensitive fields, high-cardinality identifiers, free text, or any view that references row filters, column masks, or dynamic-view security logic — unless the user explicitly confirmed the values are safe to share. If values might expose data outside the intended audience, hide the column or document the security caveat instead.
 
 **Irrelevant Columns Hidden**
 - Check: `data_sources.tables[].column_configs[].exclude` — columns with `exclude: true` are hidden from Genie
@@ -142,7 +154,7 @@ When recommending fixes, route them to the most structured Genie config surface 
 **Canonical GSL Sections**
 - Check: `instructions.text_instructions[].content`
 - Why: The Create, Fix, and Optimize workflows need a consistent text-instruction schema
-- Warning if: Text instructions do not use canonical Markdown sections in this order: `## PURPOSE`, `## DISAMBIGUATION`, `## DATA QUALITY NOTES`, `## CONSTRAINTS`, `## Instructions you must follow when providing summaries`
+- Warning if: Text instructions do not use the canonical GSL section template (`space-schema.md` → Text Instructions)
 - NA if: No text instruction is needed
 
 **Business Jargon Mapped**
@@ -190,6 +202,14 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Check: `instructions.example_question_sqls[].usage_guidance` on complex examples
 - Why: Usage guidance tells Genie when to apply a pattern — what keywords or question types should trigger it.
 - Warning if: Complex multi-step examples lack usage guidance
+
+### Trusted Assets
+
+**Trusted Assets For High-Value Questions**
+- Check: Whether questions that must be answered consistently use parameterized example SQL or registered UC SQL functions rather than plain examples or text instructions
+- Why: Trusted assets are the surfaces that return verified answers. Parameterized example SQL uses `:param_name` parameters with descriptions, type hints, and real defaults; when a user question matches its exact text, Genie can answer deterministically from it. UC SQL functions register reusable, governed logic so Genie calls verified SQL rather than re-deriving it.
+- Warning if: A high-value, frequently asked, or audit-sensitive question relies on plain example SQL or a text instruction instead of a trusted asset
+- Note: Trusted assets do not replace Metric View semantics — keep governed business definitions in the Metric View and use trusted assets for verified query shapes on top of them. Trusted assets and SQL functions count against the instruction budget, so add the ones that earn their place rather than registering everything.
 
 ### Join Specs
 
@@ -271,6 +291,16 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Why: Entity matching is most useful on a focused set of categorical columns and has platform limits
 - Warning if: Entity matching is enabled for more than 120 columns, or broadly enabled on IDs, timestamps, numeric measures, or high-cardinality free text
 
+**Knowledge-Store Snippet Count**
+- Check: Count table descriptions, join relationships, and SQL expressions together
+- Why: Databricks documents up to 200 knowledge-store snippets per Space; bloated stores dilute context
+- Warning if: Snippet-style entries approach or exceed 200
+
+**Benchmark Count**
+- Check: Count `benchmarks.questions`
+- Why: Databricks documents up to 500 benchmark questions per Space; oversized sets slow iteration
+- Warning if: Benchmark questions approach or exceed 500
+
 ---
 
 ## Config
@@ -284,6 +314,22 @@ When recommending fixes, route them to the most structured Genie config surface 
 - Check: Whether sample questions cover the space's key capabilities
 - Why: Sample questions should showcase the most valuable query patterns and guide users toward what the space does well.
 - Warning if: Sample questions are generic or don't reflect the space's data
+
+**Natural Phrasing Variants**
+- Check: Whether key intents have 2-4 natural phrasings across sample questions and benchmark coverage
+- Why: Users word the same request different ways; multiple phrasings make matching robust to real usage.
+- Warning if: Each key intent appears in only one phrasing, or variants only swap a date or category literal
+
+---
+
+## Live-Creation Prerequisites
+
+Before proposing live creation or update through the API, confirm:
+
+- The Space uses Unity Catalog data and the editor has the required Genie and data permissions.
+- A pro or serverless SQL warehouse is available with `CAN USE`.
+- The draft stays within documented limits: 30 tables/views, 100 instructions, 200 knowledge-store snippets, and 500 benchmark questions.
+- The Context Evidence Gate in `data-profiling-and-readiness.md` is met for every included source, or uncompleted checks are recorded as confidence reductions.
 
 ---
 
