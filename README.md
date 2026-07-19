@@ -13,9 +13,9 @@ This repository has two skill distributions:
 
 | Skill | Description |
 |-------|-------------|
-| **[external-agent/create-genie-space](./external-agent/create-genie-space/)** | Create a Genie Space config from Unity Catalog datasets with external-agent validation helpers |
-| **[external-agent/diagnose-genie-space](./external-agent/diagnose-genie-space/)** | Diagnose failing Genie questions, inspect space context, and produce a concrete tuning plan |
-| **[external-agent/optimize-genie-space](./external-agent/optimize-genie-space/)** | Iteratively improve Genie Space quality by versioning configs, validating changes, running benchmark evals, and comparing accuracy |
+| **[external-agent/create-genie-space](./external-agent/create-genie-space/)** | Create a Genie Space config from Unity Catalog datasets with evidence-gated readiness profiling and local JSON validation |
+| **[external-agent/diagnose-genie-space](./external-agent/diagnose-genie-space/)** | Diagnose failing Genie questions, Monitor feedback trends, and response latency; produce a concrete tuning plan |
+| **[external-agent/optimize-genie-space](./external-agent/optimize-genie-space/)** | Iteratively improve Genie Space quality with versioned configs, mandatory rollback snapshots, Chat-mode benchmark evals, and accuracy comparison |
 | **[external-agent/multi-agent-architecture](./external-agent/multi-agent-architecture/)** | Design multi-agent architectures for PoC/hackathon/MVP projects with Mermaid diagrams |
 | **[external-agent/parse-documents](./external-agent/parse-documents/)** | Build a Databricks document parsing and chunking pipeline for RAG ingestion |
 
@@ -117,7 +117,6 @@ databricks-agent-skills/
 │   ├── diagnose-genie-space/
 │   ├── optimize-genie-space/
 │   └── optimize-genie-query/
-├── package.json
 └── README.md
 ```
 
@@ -125,8 +124,8 @@ databricks-agent-skills/
 
 1. Choose the distribution: `external-agent/` for agents outside Databricks, or `genie-code/` for Databricks Genie Code.
 2. Create the skill folder: `mkdir -p external-agent/my-skill` or `mkdir -p genie-code/my-skill`.
-3. Add `SKILL.md` with frontmatter (`name`, `description`) and workflow instructions.
-4. Add any supporting files under `references/` or `scripts/` when that distribution needs them.
+3. Add `SKILL.md` with frontmatter (`name`, `description`) and workflow instructions. The `name` must match the skill folder name, and the `description` should disambiguate the skill from its siblings so agents trigger the right one.
+4. Add any supporting files under `references/` or `scripts/` when that distribution needs them. Reference scripts with skill-relative paths (`<skill-dir>/scripts/...`), not checkout-layout paths.
 5. Install and test by copying or symlinking the skill folder into the target agent's skills directory.
 
 ### Testing skills
@@ -135,6 +134,12 @@ databricks-agent-skills/
 2. Start a new Claude Code session in that project
 3. Trigger the skill naturally with a representative user request
 4. Edit the skill files, start a new session, and re-test (symlinks pick up changes automatically)
+
+Skills with helper scripts may also carry unit tests. For example, run the create-genie-space validator tests with:
+
+```bash
+python3 -m unittest discover -s external-agent/create-genie-space/tests
+```
 
 ### Contributing
 
