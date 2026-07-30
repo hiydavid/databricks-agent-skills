@@ -1,6 +1,6 @@
 ---
 name: create-metric-view
-description: "Create, draft, validate, or refine a Databricks Unity Catalog Metric View in Genie Code Agent mode. Use when users ask Genie Code to build a governed business-metrics semantic layer — authoring Metric View YAML or CREATE/ALTER VIEW DDL from inspected Unity Catalog sources, with read-only discovery and human approval before any live change. Builds the Metric View itself; to assemble or tune the consuming Genie Space, use create-genie-space or optimize-genie-space."
+description: "Create, draft, validate, or refine a Databricks Unity Catalog Metric View in Genie Code Agent mode. Use when users ask Genie Code to build a governed business-metrics semantic layer — authoring Metric View YAML or CREATE/ALTER VIEW DDL from inspected Unity Catalog sources, with read-only discovery and human approval before any live change. Builds the Metric View itself; to assemble or tune the consuming Genie Space, use Genie Code's native Genie Space skills."
 ---
 
 # Create Metric View For Genie Code
@@ -27,7 +27,7 @@ Create a governed Unity Catalog Metric View from Databricks-native context. Rely
 8. Draft `version: 1.1` YAML when agent-metadata support is confirmed per `references/metric-view-design-guide.md` (Feature Availability); otherwise use the supported baseline YAML shape and keep agent-metadata recommendations in review notes. Use the DDL shapes in `references/metric-view-profiling-and-validation.md` (Draft DDL Shapes).
 9. Validate before proposing a live run per `references/metric-view-profiling-and-validation.md` (validation templates and Validation Summary) and the Review Checklist in `references/metric-view-design-guide.md`.
 10. Present the proposed Metric View for review. Apply DDL only after explicit approval from the user in Databricks, and only with the privileges listed in `references/metric-view-design-guide.md` (Privilege And Ownership).
-11. Recommend downstream consumption only after the Metric View is approved and live (step 10), so its semantics will not change under consumers: attach it as a governed data source to Genie Spaces (via the create-genie-space or optimize-genie-space skill) and AI/BI Dashboards. Both should consume the governed measures and dimensions rather than reimplementing formulas; document any remaining semantic gaps.
+11. Recommend downstream consumption only after the Metric View is approved and live (step 10), so its semantics will not change under consumers: attach it as a governed data source to Genie Spaces (via Genie Code's native Genie Space skills) and AI/BI Dashboards. Both should consume the governed measures and dimensions rather than reimplementing formulas; document any remaining semantic gaps.
 
 ## Output
 

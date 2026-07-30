@@ -5,7 +5,9 @@ Skills that extend Databricks-aware coding agents with Databricks-specific workf
 This repository has two skill distributions:
 
 - **External-agent skills** under `external-agent/` for coding agents that run outside Databricks and need explicit helper scripts or workspace access instructions.
-- **Genie Code-only skills** under `genie-code/` for Databricks Genie Code Agent mode, where the agent already has Databricks workspace context and native execution tools.
+- **Genie Code-only skills** under `genie-code/` for specialized workflows that are not already built into Databricks Genie Code.
+
+Databricks Genie Code now provides native skills for creating, diagnosing, and improving Genie agents and spaces. The older repository-provided versions of those workflows are deprecated and retained under `genie-code/deprecated/` for historical reference only.
 
 ## Skills
 
@@ -24,10 +26,17 @@ This repository has two skill distributions:
 | Skill | Description |
 |-------|-------------|
 | **[genie-code/create-metric-view](./genie-code/create-metric-view/)** | Create governed Unity Catalog Metric Views with expert intake, read-only profiling, YAML/DDL drafting, and validation |
-| **[genie-code/create-genie-space](./genie-code/create-genie-space/)** | Create or refine Genie Spaces using Genie Code's native Unity Catalog and workspace context |
-| **[genie-code/diagnose-genie-space](./genie-code/diagnose-genie-space/)** | Diagnose Genie Space quality and benchmark health issues inside Databricks without external setup |
-| **[genie-code/optimize-genie-space](./genie-code/optimize-genie-space/)** | Tune Genie Space quality with Databricks-native benchmark review, repair, pruning, and iteration |
 | **[genie-code/optimize-genie-query](./genie-code/optimize-genie-query/)** | Run approved benchmark-driven Genie query triage using Query History performance insights, Query Profile, table layout, and warehouse evidence |
+
+### Deprecated Genie Code Skills
+
+These skills have been superseded by Genie Code's native skills and should not be installed for new workflows.
+
+| Archived skill | Replacement |
+|----------------|-------------|
+| **[genie-code/deprecated/create-genie-space](./genie-code/deprecated/create-genie-space/)** | Use Genie Code's native skill for creating Genie agents and spaces |
+| **[genie-code/deprecated/diagnose-genie-space](./genie-code/deprecated/diagnose-genie-space/)** | Use Genie Code's native skill for diagnosing Genie agents and spaces |
+| **[genie-code/deprecated/optimize-genie-space](./genie-code/deprecated/optimize-genie-space/)** | Use Genie Code's native skill for improving Genie agents and spaces |
 
 ## Setup
 
@@ -73,31 +82,25 @@ If you prefer copying instead of symlinking, use `cp -R external-agent/<skill> ~
 
 ### Databricks Genie Code
 
-Use the Databricks-native skills under `genie-code/`. These versions are intentionally less prescriptive because Genie Code Agent mode already has workspace context, Unity Catalog metadata, and native execution tools.
+Use Genie Code's native skills to create, diagnose, or improve Genie agents and spaces. Do not install the archived replacements under `genie-code/deprecated/` for new workflows.
 
-Copy the desired Genie Code-only skill folders into a workspace or user skills directory:
+For specialized workflows not covered by those native skills, copy an active skill under `genie-code/` into a workspace or user skills directory:
 
 ```text
 Workspace/.assistant/skills/
-└── create-genie-space/
+└── create-metric-view/
     ├── SKILL.md
     └── references/
 ```
 
 ```text
 /Users/{username}/.assistant/skills/
-└── optimize-genie-space/
+└── optimize-genie-query/
     ├── SKILL.md
     └── references/
 ```
 
-For example, copy `genie-code/create-metric-view`, `genie-code/create-genie-space`, `genie-code/diagnose-genie-space`, `genie-code/optimize-genie-space`, or `genie-code/optimize-genie-query` into one of those `.assistant/skills/` locations. Genie Code automatically discovers skills in Agent mode. See the [Databricks Genie Code skills docs](https://docs.databricks.com/aws/en/genie-code/skills) for details.
-
-Example prompt for iterative Genie Space optimization:
-
-```text
-use @optimize-genie-space skill and optimize my genie space, id: <INSERT_GENIE_ID> . Iterate until you reach or exceeds 90% in benchmark accuracy. Stop when you reach the goal.
-```
+The active repository-provided Genie Code skills are `genie-code/create-metric-view` and `genie-code/optimize-genie-query`. Genie Code automatically discovers installed skills in Agent mode. See the [Databricks Genie Code skills docs](https://docs.databricks.com/aws/en/genie-code/skills) for details.
 
 ## Development
 
@@ -111,18 +114,19 @@ databricks-agent-skills/
 │   ├── multi-agent-architecture/
 │   ├── optimize-genie-space/
 │   └── parse-documents/
-├── genie-code/                  # Databricks Genie Code-only skill pack
+├── genie-code/                  # Specialized Databricks Genie Code skills
 │   ├── create-metric-view/
-│   ├── create-genie-space/
-│   ├── diagnose-genie-space/
-│   ├── optimize-genie-space/
-│   └── optimize-genie-query/
+│   ├── optimize-genie-query/
+│   └── deprecated/              # Superseded by native Genie Code skills
+│       ├── create-genie-space/
+│       ├── diagnose-genie-space/
+│       └── optimize-genie-space/
 └── README.md
 ```
 
 ### Adding a new skill
 
-1. Choose the distribution: `external-agent/` for agents outside Databricks, or `genie-code/` for Databricks Genie Code.
+1. Choose the distribution: `external-agent/` for agents outside Databricks, or `genie-code/` for a specialized workflow not already provided natively by Databricks Genie Code.
 2. Create the skill folder: `mkdir -p external-agent/my-skill` or `mkdir -p genie-code/my-skill`.
 3. Add `SKILL.md` with frontmatter (`name`, `description`) and workflow instructions. The `name` must match the skill folder name, and the `description` should disambiguate the skill from its siblings so agents trigger the right one.
 4. Add any supporting files under `references/` or `scripts/` when that distribution needs them. Reference scripts with skill-relative paths (`<skill-dir>/scripts/...`), not checkout-layout paths.

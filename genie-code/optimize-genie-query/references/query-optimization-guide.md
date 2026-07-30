@@ -17,7 +17,7 @@ Use this reference when analyzing a single Genie Space's executed SQL — pulled
 
 Use this order unless the user provides a specific statement ID, profile, or existing insight-backed Query History row first:
 
-1. Confirm `diagnose-genie-space` has attributed the latency to SQL runtime (not query generation) and that the generated SQL is correct. If that attribution is missing, hand back rather than re-deriving the generation-vs-execution split here.
+1. Confirm Genie Code's native diagnosis skill has attributed the latency to SQL runtime (not query generation) and that the generated SQL is correct. If that attribution is missing, hand back rather than re-deriving the generation-vs-execution split here.
 2. Pull the space's executed queries from `system.query.history` filtered by `query_source.genie_space_id` for the target window. The Query History UI cannot filter by Space or query source, so scope with SQL.
 3. Prioritize the space's queries that carry Query performance insights before manually reviewing slow rows without insights.
 4. When a query has actionable insights, use the Optimize button to open Genie Code, but treat its rewrite or recommendation as a candidate that must be validated.
@@ -67,7 +67,7 @@ Fallback when Insights are absent or inaccessible:
 - Open Query Profile for representative rows and classify using the manual issue taxonomy.
 - State the limitation as Beta/access/missing-insight evidence, not as a healthy-performance signal.
 
-If production history is sparse or unrepresentative, an approved native benchmark run is an optional way to generate representative load: capture its run window, then re-query Query History as above. Benchmark definition, evaluation, and quality tuning belong to `optimize-genie-space`, not here.
+If production history is sparse or unrepresentative, an approved native benchmark run is an optional way to generate representative load: capture its run window, then re-query Query History as above. Benchmark definition, evaluation, and quality tuning belong to Genie Code's native Genie improvement skill, not here.
 
 ## Read-Only SQL Templates
 
@@ -316,7 +316,7 @@ If only the Query History row is available, use the `statement_id` and workspace
 | `photon_fallback` | `COVERAGE_PHOTON` | Query Profile or insight shows non-Photon operation | Rewrite unsupported operation or accept fallback when correctness requires it |
 | `federated_pushdown_limit` | none documented | Foreign table query reads too much remote data or filters cannot push down | Rewrite pushdown-friendly predicates, use `AND` composition, materialize local Delta when appropriate |
 | `cache_only_speedup` | none documented | Fast run only from result cache; cold query remains slow or profile missing | Validate cold-query path with trivial change or uncached profile |
-| `semantic_wrong_sql` | any label can coexist | SQL is fast or slow but answers the wrong business question | Stop performance tuning; hand off to `diagnose-genie-space` or `optimize-genie-space` |
+| `semantic_wrong_sql` | any label can coexist | SQL is fast or slow but answers the wrong business question | Stop performance tuning; hand off to Genie Code's native Genie diagnosis or improvement skill |
 
 ## Query Performance Insight Routing
 
@@ -375,7 +375,7 @@ Validate recommendations without mutating assets during this skill:
 - For insight-backed candidates, confirm the insight label is consistent with Query Profile and Query History evidence before recommending a lever.
 - For warehouse recommendations, compare queue/startup metrics across similar workload windows.
 - For table-layout recommendations, confirm filters match clustering, partitioning, or statistics columns and that read bytes/files decrease after approved maintenance.
-- For source/model recommendations, run affected Genie questions and related correctness checks through `diagnose-genie-space` or `optimize-genie-space` when answer quality could change.
+- For source/model recommendations, run affected Genie questions and related correctness checks through Genie Code's native Genie diagnosis or improvement skill when answer quality could change.
 
 ## Report Template
 
@@ -388,7 +388,7 @@ Validate recommendations without mutating assets during this skill:
 - Production sample (statement count):
 - Warehouse:
 - Goal:
-- Latency attribution (from diagnose-genie-space):
+- Latency attribution (from Genie Code's native diagnosis skill):
 - Correctness status:
 - Benchmark (only if used):
 

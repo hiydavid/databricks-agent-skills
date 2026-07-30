@@ -1,21 +1,21 @@
 ---
 name: optimize-genie-query
-description: "Triage and optimize query-execution latency and cost for one Databricks Genie Space's real executed SQL in Genie Code Agent mode, using system.query.history scoped to that space plus Query Profile, table layout, and warehouse evidence; recommend read-only levers while preserving answer correctness. Use when the space's SQL is correct but slow or expensive at runtime; for wrong answers or generation/config latency, hand off to diagnose-genie-space or optimize-genie-space."
+description: "Triage and optimize query-execution latency and cost for one Databricks Genie Space's real executed SQL in Genie Code Agent mode, using system.query.history scoped to that space plus Query Profile, table layout, and warehouse evidence; recommend read-only levers while preserving answer correctness. Use when the space's SQL is correct but slow or expensive at runtime; for wrong answers or generation/config latency, hand off to Genie Code's native Genie diagnosis or improvement skills."
 ---
 
 # Optimize Genie Query For Genie Code
 
-Triage and optimize the query-execution performance and cost of a single Genie Space's real executed SQL. Pick up after `diagnose-genie-space` has attributed a latency complaint to SQL runtime (execution, queue, startup, scan, spill, result-fetch) and confirmed the generated SQL is correct. Anchor on the space's actual executed queries from `system.query.history` filtered by `query_source.genie_space_id`; use the native Query performance insights (Beta) as a triage signal when present; and treat approved benchmark runs as an optional way to generate or reproduce load, not the primary evidence source. Validate every finding against Query Profile, table layout, SQL warehouse evidence, and Unity Catalog metadata. See `references/query-optimization-guide.md` for the evidence order, read-only SQL templates, issue taxonomy, and report template.
+Triage and optimize the query-execution performance and cost of a single Genie Space's real executed SQL. Pick up after Genie Code's native diagnosis has attributed a latency complaint to SQL runtime (execution, queue, startup, scan, spill, result-fetch) and confirmed the generated SQL is correct. Anchor on the space's actual executed queries from `system.query.history` filtered by `query_source.genie_space_id`; use the native Query performance insights (Beta) as a triage signal when present; and treat approved benchmark runs as an optional way to generate or reproduce load, not the primary evidence source. Validate every finding against Query Profile, table layout, SQL warehouse evidence, and Unity Catalog metadata. See `references/query-optimization-guide.md` for the evidence order, read-only SQL templates, issue taxonomy, and report template.
 
 ## Hard Rules
 
-- This skill does not own latency attribution. If it is not yet confirmed that SQL runtime (not query generation) dominates and the SQL is correct, hand back to `diagnose-genie-space` rather than re-deriving the generation-vs-execution split here.
+- This skill does not own latency attribution. If it is not yet confirmed that SQL runtime (not query generation) dominates and the SQL is correct, hand back to Genie Code's native diagnosis skill rather than re-deriving the generation-vs-execution split here.
 - This skill is diagnostic and recommendation-first. Do not edit the Genie Space, benchmark definitions, SQL warehouse settings, Unity Catalog objects, source schemas, or source data.
 - Anchor on the target space's real executed queries from `system.query.history`, filtered by `query_source.genie_space_id`. The Query History UI cannot filter by Genie Space or query source, so scope with the SQL templates in the reference, not the UI filter bar. `query_source.genie_space_id` identifies a space, not an individual Genie message, so attribute findings at the workload level.
-- Treat benchmark runs as optional load generation or before/after validation, never the primary evidence source. Launch a native benchmark run only after explicit user approval; benchmark definition, evaluation, and quality tuning belong to `optimize-genie-space`.
+- Treat benchmark runs as optional load generation or before/after validation, never the primary evidence source. Launch a native benchmark run only after explicit user approval; benchmark definition, evaluation, and quality tuning belong to Genie Code's native Genie improvement skill.
 - Use only bounded read-only SQL: `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, `information_schema`, and system-table reads.
 - Do not run `ALTER`, `OPTIMIZE`, `ANALYZE`, `VACUUM`, `CREATE`, `DROP`, `TRUNCATE`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, table rewrites, warehouse edits, benchmark definition edits, or Genie Space edits.
-- Preserve answer correctness. If the generated SQL is semantically wrong, stop performance tuning and hand off to `diagnose-genie-space` or `optimize-genie-space`.
+- Preserve answer correctness. If the generated SQL is semantically wrong, stop performance tuning and hand off to Genie Code's native Genie diagnosis or improvement skill.
 - Treat Query performance insights as a Beta feature gated on the workspace Previews page: absent, hidden, or unavailable insights are limitations, not evidence that performance is healthy.
 - Treat cache hits, missing Query Profile access, private or encrypted system-table fields, unavailable system tables, and incomplete query history as limitations.
 - Prefer concrete insight, query, profile, warehouse, and table-layout evidence over generic optimization advice.
@@ -31,9 +31,9 @@ Triage and optimize the query-execution performance and cost of a single Genie S
    - latency, queue-time, cost, spill, scan, or concurrency goal
    - expected unchanged answer shape or business result
 2. Confirm you are in the right place (latency-side gate). This skill optimizes the execution side; it does not decide generation vs execution latency:
-   - require the upstream attribution from `diagnose-genie-space`: is SQL runtime confirmed to dominate, with the generated SQL correct?
-   - if that attribution is missing, hand back to `diagnose-genie-space` for its Latency Pre-Routing split rather than re-deriving the generation-vs-execution decision here
-   - if the attribution points to generation/thinking-phase latency or to space configuration, hand off to `optimize-genie-space`
+   - require upstream attribution from Genie Code's native diagnosis: is SQL runtime confirmed to dominate, with the generated SQL correct?
+   - if that attribution is missing, hand back to the native diagnosis skill for its latency split rather than re-deriving the generation-vs-execution decision here
+   - if the attribution points to generation/thinking-phase latency or to space configuration, hand off to Genie Code's native Genie improvement skill
    - only when SQL runtime dominates and the SQL is correct, continue
 3. Locate the space's executed queries:
    - query `system.query.history` filtered by `query_source.genie_space_id` for the target window (see `references/query-optimization-guide.md` -> Read-Only SQL Templates); the Query History UI cannot filter by Space, so scope with SQL
@@ -60,4 +60,4 @@ Triage and optimize the query-execution performance and cost of a single Genie S
 
 ## Output
 
-Use the report template in `references/query-optimization-guide.md` -> Report Template. End with the next action: user confirmation needed for any mutating follow-up, a handoff to `diagnose-genie-space` (for latency attribution or semantic quality) or `optimize-genie-space` (for space configuration and benchmark-driven quality work), or a recommendation-only summary when no change is justified.
+Use the report template in `references/query-optimization-guide.md` -> Report Template. End with the next action: user confirmation needed for any mutating follow-up, a handoff to Genie Code's native diagnosis skill (for latency attribution or semantic quality) or native Genie improvement skill (for space configuration and benchmark-driven quality work), or a recommendation-only summary when no change is justified.
