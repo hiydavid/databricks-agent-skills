@@ -6,7 +6,6 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastmcp import FastMCP
 
@@ -130,16 +129,6 @@ app = FastAPI(
     version="2.0.0",
     routes=[*mcp_app.routes, *api.routes],
     lifespan=lifespan,
-)
-
-# CORS: allow only the configured workspace origin(s) (spec §3/§10). When unset,
-# no cross-origin browser access is permitted (fail-closed).
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=list(settings.cors_allow_origins),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
 )
 
 

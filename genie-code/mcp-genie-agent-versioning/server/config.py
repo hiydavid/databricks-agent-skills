@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Mapping, Optional
 
 DEFAULT_HISTORY_SCHEMA = "genie_agent_versioning"
@@ -41,7 +41,6 @@ class Settings:
     history_owner_group: str = ""
     transfer_ownership: bool = False
     grantee_use_catalog_confirmed: bool = False
-    cors_allow_origins: tuple[str, ...] = field(default_factory=tuple)
     obo_enabled: bool = True
     max_config_bytes: int = DEFAULT_MAX_CONFIG_BYTES
 
@@ -52,11 +51,6 @@ class Settings:
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "Settings":
         env = env if env is not None else os.environ
-        origins = tuple(
-            origin.strip()
-            for origin in env.get("CORS_ALLOW_ORIGINS", "").split(",")
-            if origin.strip()
-        )
         return cls(
             history_catalog=env.get("HISTORY_CATALOG", "").strip(),
             history_schema=(
@@ -69,7 +63,6 @@ class Settings:
             grantee_use_catalog_confirmed=_as_bool(
                 env.get("HISTORY_GRANTEE_USE_CATALOG_CONFIRMED"), default=False
             ),
-            cors_allow_origins=origins,
             obo_enabled=_as_bool(env.get("OBO_ENABLED"), default=True),
             max_config_bytes=_as_positive_int(
                 env.get("MAX_CONFIG_BYTES"), default=DEFAULT_MAX_CONFIG_BYTES
@@ -99,7 +92,6 @@ class Settings:
             "sql_warehouse_id": self.sql_warehouse_id,
             "transfer_ownership": self.transfer_ownership,
             "grantee_use_catalog_confirmed": self.grantee_use_catalog_confirmed,
-            "cors_allow_origins": list(self.cors_allow_origins),
             "obo_enabled": self.obo_enabled,
             "max_config_bytes": self.max_config_bytes,
         }

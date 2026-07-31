@@ -144,8 +144,6 @@ Edit [`app.yaml`](app.yaml):
   the account-level group from step 3.
 - Set `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true` after confirming that principal has
   effective `USE CATALOG`, whether directly or through an existing group.
-- Set `CORS_ALLOW_ORIGINS` to the exact workspace origin, such as
-  `https://dbc-xxxxxxxx-xxxx.cloud.databricks.com`.
 
 In the App configuration page:
 
@@ -239,7 +237,6 @@ Smoke-test in this order:
 | `HISTORY_GRANTEE` | UC principal receiving OBO table access: a user email or account-level group. |
 | `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED` | Confirmation that the principal already has effective `USE CATALOG`, directly or through inheritance. |
 | `SQL_WAREHOUSE_ID` | SQL warehouse resource injected from `sql-warehouse`. |
-| `CORS_ALLOW_ORIGINS` | Comma-separated workspace origin allowlist. |
 | `OBO_ENABLED` | User-authorization feature flag; defaults to `true`. |
 | `MAX_CONFIG_BYTES` | Maximum UTF-8 envelope size; defaults to 5 MiB. |
 | `TRANSFER_OWNERSHIP` | Opt-in durable group ownership handoff; defaults to `false`. |
