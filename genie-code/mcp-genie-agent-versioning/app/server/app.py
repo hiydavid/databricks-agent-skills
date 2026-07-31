@@ -23,11 +23,11 @@ from .config import Settings
 from .tools import register_tools
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("mcp-genie-space-history")
+logger = logging.getLogger("mcp-genie-agent-versioning")
 
 settings = Settings.from_env()
 
-mcp_server = FastMCP(name="mcp-genie-space-history")
+mcp_server = FastMCP(name="mcp-genie-agent-versioning")
 register_tools(mcp_server, settings)
 
 # stateless_http=True: each request is self-contained (no mcp-session-id handshake),
@@ -70,12 +70,12 @@ async def lifespan(app: FastAPI):
         yield
 
 
-api = FastAPI(title="mcp-genie-space-history", version="0.1.0")
+api = FastAPI(title="mcp-genie-agent-versioning", version="0.1.0")
 
 
 @api.get("/", include_in_schema=False)
 async def root() -> dict:
-    return {"message": "Genie Space History MCP running", "mcp_endpoint": "/mcp"}
+    return {"message": "Genie Agent Versioning MCP running", "mcp_endpoint": "/mcp"}
 
 
 @api.get("/healthz", include_in_schema=False)
@@ -85,7 +85,7 @@ async def healthz() -> dict:
 
 # Combine the MCP protocol routes with the custom API routes under one app.
 app = FastAPI(
-    title="Genie Space History MCP",
+    title="Genie Agent Versioning MCP",
     version="0.1.0",
     routes=[*mcp_app.routes, *api.routes],
     lifespan=lifespan,

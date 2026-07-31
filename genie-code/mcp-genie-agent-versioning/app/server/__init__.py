@@ -1,4 +1,4 @@
-"""Genie Space History MCP server (P1 — write + read).
+"""Legacy v1 Genie Agent Versioning MCP server (passive history).
 
 Productionizes the de-risked P0 mechanics into a real package: a FastAPI + FastMCP
 server, mounted at ``/mcp`` over stateless streamable HTTP, that persists the
@@ -12,7 +12,7 @@ Module map:
   * ``auth``         — OBO (per-request user) vs app-SP WorkspaceClient builders (spec §5).
   * ``provisioning`` — idempotent bootstrap: schema/tables/filter/ownership/grants (§7.1/§10).
   * ``store``        — :class:`UCTableStore`, the UC storage adapter (spec §6/§7).
-  * ``tools``        — the four P1 MCP tools (spec §6).
+  * ``tools``        — the five v1 MCP tools.
   * ``app``/``main`` — the FastAPI/FastMCP wiring + uvicorn entrypoint (spec §3/§10).
 """
 

@@ -1,6 +1,9 @@
-# RUNBOOK — Genie Space History MCP (operator)
+# RUNBOOK — Genie Agent Versioning MCP (operator)
 
-Operator procedure for deploying and connecting the production **Genie Space History
+> This runbook deploys the legacy v1 passive-history implementation. It does not yet
+> deploy the v2 guarded mutation gateway described in the design spec.
+
+Operator procedure for deploying and connecting the production **Genie Agent Versioning
 MCP** server in [`app/`](app). It covers the steps the app **cannot** self-perform: the
 app-SP Unity Catalog grants, the deploy, the OBO scope/enablement, a smoke test, and
 the Genie-Code connect click. Once deployed, the app idempotently bootstraps its own
@@ -37,11 +40,11 @@ and startup never crashes.
 ## 2. Deploy the App
 
 ```bash
-APP=mcp-genie-space-history     # name must start with "mcp-" for AI Playground / Genie Code
-WS=/Workspace/Users/<you>/mcp-genie-space-history
+APP=mcp-genie-agent-versioning     # name must start with "mcp-" for AI Playground / Genie Code
+WS=/Workspace/Users/<you>/mcp-genie-agent-versioning
 
 databricks --profile <profile> apps create "$APP"                       # provisions compute (~min); first deploy only
-databricks --profile <profile> sync genie-code/mcp-genie-space-history/app "$WS" --full
+databricks --profile <profile> sync genie-code/mcp-genie-agent-versioning/app "$WS" --full
 databricks --profile <profile> apps deploy "$APP" --source-code-path "$WS"
 databricks --profile <profile> apps get "$APP"                          # read the served URL
 ```
@@ -59,7 +62,7 @@ OBO token otherwise defaults to identity-only scopes and warehouse calls fail). 
 inspect or adjust the scopes on a running app without redeploying:
 
 ```bash
-databricks --profile <profile> apps update mcp-genie-space-history \
+databricks --profile <profile> apps update mcp-genie-agent-versioning \
   --json '{"user_api_scopes":["sql"]}'
 # may require user re-consent; restart the app afterward
 ```
@@ -68,7 +71,7 @@ databricks --profile <profile> apps update mcp-genie-space-history \
 
 ```bash
 TOKEN=$(databricks --profile <profile> auth token | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
-URL=$(databricks --profile <profile> apps get mcp-genie-space-history | python3 -c 'import sys,json;print(json.load(sys.stdin)["url"])')
+URL=$(databricks --profile <profile> apps get mcp-genie-agent-versioning | python3 -c 'import sys,json;print(json.load(sys.stdin)["url"])')
 
 curl -s -H "Authorization: Bearer $TOKEN" "$URL/healthz"                      # -> 200
 curl -s -X POST "$URL/mcp" -H "Authorization: Bearer $TOKEN" \
@@ -82,7 +85,7 @@ Expect the five MCP tools (spec §6): `save_config_snapshot`, `save_report`,
 ## 5. Connect from Genie Code
 
 In the workspace UI: **Genie Code → Settings → MCP Servers → Add Server → Custom MCP**
-→ select the `mcp-genie-space-history` app. Requirements: same workspace, `/mcp`,
+→ select the `mcp-genie-agent-versioning` app. Requirements: same workspace, `/mcp`,
 stateless, CORS allow-lists the workspace URL (`CORS_ALLOW_ORIGINS`), ≤20 tools total.
 Confirm the tools appear, then call one (e.g. `list_history`) as yourself — OBO forwards
 your `X-Forwarded-Access-Token` so `current_user()` resolves to **you**, not the app SP.

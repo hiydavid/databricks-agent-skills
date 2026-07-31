@@ -32,7 +32,7 @@ from .errors import (
 from .sql import SqlError, make_sql_exec
 from .store import UCTableStore
 
-logger = logging.getLogger("mcp-genie-space-history.tools")
+logger = logging.getLogger("mcp-genie-agent-versioning.tools")
 
 
 def _require(value: Optional[str], name: str) -> str:

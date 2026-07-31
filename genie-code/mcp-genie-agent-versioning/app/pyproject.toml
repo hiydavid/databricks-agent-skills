@@ -1,9 +1,9 @@
 # Local dev tooling config (lint + typecheck + tests). Databricks Apps installs
 # requirements.txt at deploy; this file is for the dev inner loop and CI (P4).
 [project]
-name = "mcp-genie-space-history"
+name = "mcp-genie-agent-versioning"
 version = "0.1.0"
-description = "Genie Space History MCP server (P1 — write + read) on Databricks Apps"
+description = "Genie Agent Versioning MCP server (P1 — write + read) on Databricks Apps"
 requires-python = ">=3.11"
 dependencies = [
     "databricks-sdk>=0.118.0",

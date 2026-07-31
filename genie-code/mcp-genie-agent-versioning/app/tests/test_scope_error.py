@@ -27,7 +27,7 @@ def no_obo_token():
 
 def test_missing_obo_token_in_app_returns_scope_error(monkeypatch, settings, no_obo_token):
     # Simulate running inside a deployed App with NO forwarded token.
-    monkeypatch.setenv("DATABRICKS_APP_NAME", "mcp-genie-space-history")
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "mcp-genie-agent-versioning")
 
     result = tools._run_tool(settings, "save_config_snapshot", _never_runs)
 
@@ -39,7 +39,7 @@ def test_missing_obo_token_in_app_returns_scope_error(monkeypatch, settings, no_
 
 def test_disabled_obo_returns_scope_error(monkeypatch, settings):
     # OBO disabled raises before the token is ever consulted.
-    monkeypatch.setenv("DATABRICKS_APP_NAME", "mcp-genie-space-history")
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "mcp-genie-agent-versioning")
     disabled = dataclasses.replace(settings, obo_enabled=False)
 
     result = tools._run_tool(disabled, "list_history", _never_runs)
@@ -48,7 +48,7 @@ def test_disabled_obo_returns_scope_error(monkeypatch, settings):
 
 
 def test_get_user_workspace_client_raises_when_token_missing(monkeypatch, no_obo_token):
-    monkeypatch.setenv("DATABRICKS_APP_NAME", "mcp-genie-space-history")
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "mcp-genie-agent-versioning")
     with pytest.raises(OBOScopeError):
         auth.get_user_workspace_client(obo_enabled=True)
 

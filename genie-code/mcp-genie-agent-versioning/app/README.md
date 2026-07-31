@@ -1,26 +1,27 @@
-# Genie Space History MCP — server (`app/`)
+# Genie Agent Versioning MCP — server (`app/`)
 
-Production server for the Genie Space History MCP, deployed on **Databricks Apps**
+> **Legacy v1 implementation:** this app passively stores caller-supplied snapshots.
+> It does not yet implement the v2 guarded mutation gateway in the authoritative design.
+
+Production server for the Genie Agent Versioning MCP, deployed on **Databricks Apps**
 and mounted at **`/mcp`** over stateless streamable HTTP. It persists the artifacts
 the `genie-code/` skills emit to governed **Unity Catalog Delta tables** and serves
 them back. The MCP **never calls the Genie API** — it only touches UC (Option A).
 
-This is the **P1 (write + read)** slice. The authoritative design is
-[`../../genie-space-history-mcp-design.md`](../../genie-space-history-mcp-design.md).
+This is the legacy **P1/P2 passive-history** implementation. The authoritative v2 design is
+[`../../genie-agent-versioning-mcp-design.md`](../../genie-agent-versioning-mcp-design.md).
 
-## What ships in P1
+## What ships in v1
 
-Four MCP tools (spec §6), all running **On-Behalf-Of-User (OBO)**:
+Five MCP tools, all running **On-Behalf-Of-User (OBO)**:
 
 | Tool | Purpose | Writes |
 | --- | --- | --- |
 | `save_config_snapshot` | Persist a Space config snapshot (the rollback-critical snapshot). Server computes a sha256 `config_hash`, stores the caller's `etag` verbatim, sets lineage via `parent_config_version_id`. Snapshots are ordered/identified by `created_at` + `config_version_id` (no monotonic version counter). | `config_snapshots` |
 | `save_report` | Persist a Markdown artifact, routed by `artifact_type` (`diagnose_report` / `query_report` / `design_proposal` / `metric_view_ddl`); unknown types rejected; `redacted` defaults to `true`. | the routed report table |
+| `record_optimization_run` | Persist one optimization run and its per-question evaluation results. | `optimization_runs`, `eval_results` |
 | `list_history` | Timeline for a Space — UNION across all artifact tables; optional `artifact_type` / `since` filters. | — |
 | `get_artifact` | Resolve a `config_version_id` / `artifact_id` / `run_id` across all tables and return the full record. | — |
-
-> `record_optimization_run` (P2) is **out of scope**, but `optimization_runs` /
-> `eval_results` tables still exist and `list_history` / `get_artifact` span them.
 
 ## Module layout (`server/`)
 
@@ -33,7 +34,7 @@ server/
 ├── auth.py          # OBO (per-request user) vs app-SP WorkspaceClient builders (spec §5)
 ├── provisioning.py  # idempotent startup bootstrap: schema/tables/filter/ownership/grants
 ├── store.py         # UCTableStore — server-side bound params, idempotent dedupe, list/get
-├── tools.py         # the four P1 MCP tools + OBO/error wrapping
+├── tools.py         # the five v1 MCP tools + OBO/error wrapping
 ├── app.py           # FastAPI + FastMCP mount at /mcp, CORS, OBO middleware, lifespan bootstrap
 └── main.py          # uvicorn entrypoint (binds DATABRICKS_APP_PORT)
 ```
@@ -109,7 +110,7 @@ guarantee) by construction (cross-review B1).
 ## Dev inner loop
 
 ```bash
-cd genie-code/mcp-genie-space-history/app
+cd genie-code/mcp-genie-agent-versioning/app
 
 # Tests (no live workspace needed — the SQL layer is mocked)
 python -m pytest

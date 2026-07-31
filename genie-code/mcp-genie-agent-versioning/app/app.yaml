@@ -1,4 +1,4 @@
-# Databricks Apps manifest for the Genie Space History MCP server (spec §10).
+# Databricks Apps manifest for the Genie Agent Versioning MCP server (spec §10).
 # App name must start with "mcp-" for AI Playground / Genie Code recognition.
 #
 # Deploy root is this `app/` directory: uvicorn resolves `server.app:app` against
