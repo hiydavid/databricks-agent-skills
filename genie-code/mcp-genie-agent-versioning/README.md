@@ -1,4 +1,4 @@
-# Genie Agent Versioning MCP v2
+# Genie Agent Versioning MCP
 
 This Databricks App is a prompt-routed configuration version store for Genie Agents. It
 exposes stateless streamable HTTP at `/mcp`, stores complete caller-supplied configuration
@@ -43,14 +43,13 @@ rollback.
 ## Architecture and security
 
 - FastAPI + FastMCP on Databricks Apps, served by uvicorn.
-- App identity provisions the schema, migration ledger, table, row filter, and grants.
+- App identity provisions the schema, table, row filter, and grants.
 - Every tool read/write runs as the calling user through OBO SQL.
 - The only user OAuth scope is `sql`; the tool path makes no identity or Genie API call.
 - A Unity Catalog row filter enforces `created_by = SESSION_USER()`, so histories are
   private per user even when users collaborate on the same Agent.
-- `/healthz` is process liveness. `/readyz` returns HTTP 503 until migration, filtering,
-  and required grantee table access succeed.
-- Legacy v1 tables are never dropped or modified.
+- `/healthz` is process liveness. `/readyz` returns HTTP 503 until schema provisioning,
+  filtering, and required grantee table access succeed.
 
 ## Deploy on Databricks
 
@@ -65,8 +64,8 @@ You need:
 - Permission to create and manage a Databricks App.
 - A running SQL warehouse.
 - A pre-existing Unity Catalog catalog with managed storage.
-- An account-level group containing the App users, for example
-  `genie_versioning_users`.
+- A Unity Catalog principal for MCP access: your user email for a single-user deployment,
+  or an account-level group for a multi-user deployment.
 - A catalog owner or metastore administrator who can grant the initial catalog privileges.
 - Databricks Apps user authorization enabled for the workspace.
 
@@ -92,26 +91,48 @@ databricks apps get mcp-genie-agent-versioning
 If your CLI's `create -h` shows a positional name instead, use that form. Copy the App
 service principal identity from the command output or the App's configuration page.
 
-### 3. Grant the bootstrap prerequisites
+### 3. Grant the bootstrap prerequisites and choose the MCP user principal
 
-As a catalog owner, run the following in a SQL editor. Use the exact App service principal
-and account-group names:
+The App service principal and the user calling the MCP are separate identities. The App
+service principal provisions the schema, table, row filter, and grants. Give it bootstrap
+access using the exact service-principal identity from step 2:
 
 ```sql
 GRANT USE CATALOG ON CATALOG <catalog> TO `<app-service-principal>`;
 GRANT CREATE SCHEMA ON CATALOG <catalog> TO `<app-service-principal>`;
+```
 
+Next choose the principal that will call the MCP through OBO authorization.
+
+#### Single user
+
+Set `HISTORY_GRANTEE` to your Databricks user email. If you already have effective
+`USE CATALOG` access, directly or through an existing group, no additional user grant is
+needed. Set `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true` to confirm that access.
+
+If you do not already have catalog access, a catalog owner must grant it:
+
+```sql
+GRANT USE CATALOG ON CATALOG <catalog> TO `<your-email>`;
+```
+
+#### Multiple users
+
+Create or reuse an account-level group, add the MCP users, and set `HISTORY_GRANTEE` to
+that group name. The group must exist before the App starts. If it does not already have
+effective catalog access, a catalog owner must grant it:
+
+```sql
 GRANT USE CATALOG ON CATALOG <catalog> TO `genie_versioning_users`;
 ```
 
-The last grant must be completed before setting
-`HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true`. The App owns the schema it creates and will
-grant the user group `USE SCHEMA` plus `SELECT, MODIFY` only on the row-filtered version
-table. It does not need `MANAGE` on the catalog.
+Then set `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true`. `USE CATALOG` is only permission to
+reference objects inside the catalog; it does not grant access to other schemas or tables.
 
-For an upgrade that reuses an existing schema, the existing schema owner must additionally
-allow the App service principal to create the v2 table/function and manage their grants, or
-perform the migration as the owner.
+In either case, the App owns the schema it creates and grants the selected
+`HISTORY_GRANTEE` principal `USE SCHEMA` plus `SELECT, MODIFY` only on the row-filtered
+version table. A grantee is required by this implementation, but it does not have to be a
+group. The App does not need `MANAGE` on the catalog.
 
 ### 4. Configure `app.yaml` and the SQL warehouse resource
 
@@ -119,8 +140,10 @@ Edit [`app.yaml`](app.yaml):
 
 - Set `HISTORY_CATALOG` to the catalog from step 3.
 - Leave `HISTORY_SCHEMA=genie_agent_versioning` for a fresh deployment.
-- Set `HISTORY_GRANTEE=genie_versioning_users`.
-- Set `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true` after the grant in step 3.
+- For one user, set `HISTORY_GRANTEE` to that user's email. For multiple users, set it to
+  the account-level group from step 3.
+- Set `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true` after confirming that principal has
+  effective `USE CATALOG`, whether directly or through an existing group.
 - Set `CORS_ALLOW_ORIGINS` to the exact workspace origin, such as
   `https://dbc-xxxxxxxx-xxxx.cloud.databricks.com`.
 
@@ -175,7 +198,7 @@ Open the App URL while authenticated:
 - `/mcp` is the MCP endpoint; it is not a normal browser page.
 
 If readiness returns 503, inspect its bootstrap report and the App logs. The usual causes
-are a missing catalog/schema privilege, an incorrectly named account group, a row-filter
+are a missing catalog/schema privilege, an incorrectly named grantee principal, a row-filter
 failure, or a SQL warehouse resource that is stopped or not bound with key
 `sql-warehouse`.
 
@@ -207,37 +230,24 @@ Smoke-test in this order:
    `before_rollback`, retrieves the target, reads a fresh live etag, and then applies it.
 5. Temporarily disconnect the MCP and verify Genie Code stops before a requested edit.
 
-## Upgrade from v1
-
-V2 is a breaking MCP tool-surface change. The v1 report, evaluation, and generic artifact
-tools are no longer registered.
-
-- To add v2 beside an existing deployment, explicitly set
-  `HISTORY_SCHEMA=genie_space_history` before deploying.
-- Bootstrap adds `agent_config_versions` and `schema_migrations`; it does not alter or drop
-  the seven v1 tables.
-- V1 snapshots generally contain only `serialized_space` and `etag`, so they cannot be
-  promoted to rollback-ready v2 versions without the missing outer fields. They remain
-  available as legacy partial records in `config_snapshots`.
-- Fresh deployments default to `genie_agent_versioning`.
-- Keep `TRANSFER_OWNERSHIP=false` during initial validation and while automatic migrations
-  may still run. An operator can enable a one-time transfer to a durable owner group after
-  ensuring that owner will perform future migrations.
-
 ## Configuration
 
 | Variable | Meaning |
 | --- | --- |
 | `HISTORY_CATALOG` | Pre-existing Unity Catalog catalog; the App never creates it. |
 | `HISTORY_SCHEMA` | Target schema; defaults to `genie_agent_versioning`. |
-| `HISTORY_GRANTEE` | Account group whose OBO users receive table access. |
-| `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED` | Operator confirmation that the group already has `USE CATALOG`. |
+| `HISTORY_GRANTEE` | UC principal receiving OBO table access: a user email or account-level group. |
+| `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED` | Confirmation that the principal already has effective `USE CATALOG`, directly or through inheritance. |
 | `SQL_WAREHOUSE_ID` | SQL warehouse resource injected from `sql-warehouse`. |
 | `CORS_ALLOW_ORIGINS` | Comma-separated workspace origin allowlist. |
 | `OBO_ENABLED` | User-authorization feature flag; defaults to `true`. |
 | `MAX_CONFIG_BYTES` | Maximum UTF-8 envelope size; defaults to 5 MiB. |
 | `TRANSFER_OWNERSHIP` | Opt-in durable group ownership handoff; defaults to `false`. |
 | `HISTORY_OWNER_GROUP` | Required only when ownership transfer is enabled. |
+
+Leave `TRANSFER_OWNERSHIP=false` while the App manages schema changes. An operator can
+enable a one-time transfer to a durable owner group after deciding that the group will
+manage future schema changes.
 
 ## Local verification
 
