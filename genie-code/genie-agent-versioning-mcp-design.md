@@ -1,175 +1,165 @@
 # Genie Agent Versioning MCP — Design Spec
 
-**Status:** Proposed v2; the current server is a v1 implementation and does not yet satisfy this contract  
-**Audience:** Engineers building the MCP server and owners of the native Genie Code experience  
+**Status:** Proposed v2; the current server is a v1 implementation and does not yet satisfy this contract
+**Audience:** Engineers building the MCP server and users configuring native Genie Code
 **Last updated:** 2026-07-30
 
 > Genie Spaces and Genie Agents are the same Databricks product. This document uses
-> **Genie Agent** for the product name while retaining `space_id` only where the existing
-> REST/SDK surface still uses that legacy field name.
+> **Genie Agent** for the product name while retaining `space_id` only where an existing
+> API or stored record still uses that legacy field name.
 
 ## 1. Goal
 
-Databricks currently replaces a Genie Agent configuration in place. The v2 server
-provides a guarded mutation path built around this invariant:
+Databricks currently replaces a Genie Agent configuration in place. The MCP provides
+durable configuration snapshots so Genie Code can list previous versions and restore one
+later with its native Genie Agent tools.
 
-> **A Genie Agent configuration must not be mutated until a durable snapshot of the
-> current live configuration has been persisted successfully.**
+The intended workflow invariant is:
 
-For every update or rollback routed through the MCP, the server also captures the
-resulting live configuration as a new version. History is append-only: rollback creates
-a new version; it never deletes or rewrites an older version. Direct native edits remain
-possible on Databricks and are outside this guarantee.
+> **Before Genie Code changes a Genie Agent configuration, it first persists a complete
+> snapshot through this MCP and proceeds only when the save succeeds.**
+
+The MCP does not read or update Genie Agents. It never calls the Genie API. Genie Code
+owns live configuration reads, configuration edits, optimistic concurrency, and rollback
+execution through its native tools.
 
 The v2 scope is deliberately narrow:
 
-- Version complete Genie Agent configurations.
-- Apply guarded configuration changes.
-- List and retrieve versions.
-- Roll back through the same guarded mutation path.
-- Attribute operations to the calling user and enforce the Agent's native permissions.
+- Save complete Genie Agent configuration versions supplied by Genie Code.
+- List versions for an Agent.
+- Retrieve a complete version for inspection or rollback.
+- Preserve lineage, rollback references, hashes, actor identity, and timestamps.
 
 Reports, optimization runs, benchmark results, and metric-view artifacts are not part of
-the core versioning service. They can be added later as a separate extension.
+the core versioning service.
 
-## 2. What the MCP can and cannot enforce
+## 2. Responsibility boundary
 
-The MCP can strictly enforce snapshot-before-update inside its own mutation tools. It
-cannot force Genie Code to select those tools instead of Databricks' native edit path.
+### 2.1 MCP responsibilities
 
-### 2.1 Guarded mutation guarantee — implemented by this MCP
+- Validate and persist caller-supplied configuration envelopes.
+- Generate stable version identifiers.
+- Preserve every snapshot event, even when its content matches an older version.
+- List and retrieve versions scoped to the requested Agent and calling user.
+- Return structured failures that Genie Code treats as blocking before an edit.
 
-The MCP owns the entire mutation workflow in one tool call:
+### 2.2 Genie Code responsibilities
 
-```text
-validate request
-      ↓
-read current Agent configuration + live etag as the user
-      ↓
-persist durable before-version
-      ↓ only after persistence succeeds
-update Agent using that same live etag
-      ↓
-read resulting live configuration
-      ↓
-persist durable after-version
-```
+- Read the current live Agent configuration, including all restorable outer fields.
+- Capture the live `etag` with the snapshot as provenance.
+- Call the MCP before every native configuration edit.
+- Stop without editing when the before-snapshot call fails.
+- Perform the native configuration update.
+- For rollback, retrieve the target version from the MCP and apply it with native tools.
+- Use a freshly read **live** etag for rollback; never use the target version's historical
+  etag as the update lock.
 
-The MCP never exposes a write tool that can skip the before snapshot. A snapshot failure
-must prove that no Genie update API call occurred.
+### 2.3 What cannot be enforced
 
-### 2.2 Client routing — prompt-based, best effort
+An MCP server cannot intercept a native tool call made directly by Genie Code. A user
+with `CAN MANAGE` and Auto-Approve enabled allows Genie Code to edit the Agent directly
+without an MCP checkpoint.
 
-An MCP server cannot intercept a native tool call made directly by its client. If Genie
-Code retains a separate native `update_space`/configuration-edit path, the server cannot
-technically force Genie Code to call the MCP first. In particular, a user with
-`CAN MANAGE` and Auto-Approve enabled allows Genie Code to edit the Agent directly on the
-user's behalf without an MCP checkpoint.
+The current mitigation is a user/workspace prompt instruction. This is behavioral
+enforcement, not a security boundary. The server cannot detect a bypass because it does
+not read the live Agent or receive platform change events.
 
-The current mitigation is a user/workspace prompt instruction that tells native Genie
-Code to route every Agent configuration mutation through this MCP. This is behavioral
-enforcement, not a security boundary. No custom repository skill integration is needed.
+Recommended Genie Code instruction:
 
-Recommended instruction:
+> Before changing any Genie Agent configuration, first read its complete current
+> configuration and save it with the connected `mcp-genie-agent-versioning` server using
+> `save_agent_config_version` with reason `before_update` or `before_rollback`. Proceed
+> only if the save succeeds, then perform the edit or rollback with Genie Code's native
+> tools. Use `list_agent_versions` and `get_agent_version` to select rollback targets. If
+> the MCP is unavailable or the save fails, stop without making the edit and tell the
+> user. Follow this rule even when Auto-Approve is enabled.
 
-> Before changing any Genie Agent configuration, always use the connected
-> `mcp-genie-agent-versioning` server. For a normal edit, call
-> `apply_agent_config_change`; for a restore, call `rollback_agent_config`. Never use a
-> native Genie Agent configuration-update tool directly. If the MCP is unavailable or
-> returns anything other than success, stop without editing and tell the user. Follow
-> this rule even when Auto-Approve is enabled.
+The MCP tool descriptions repeat this instruction. No repository-managed skill files are
+required.
 
-The MCP tool descriptions repeat this instruction, but neither the prompt nor tool
-descriptions can prevent a client-side bypass. The v2 project therefore does not claim a
-hard client-routing guarantee.
+## 3. Architecture and identity
 
-As a secondary mitigation, each MCP mutation compares the current live configuration
-with the latest stored after-version. A mismatch is recorded as an
-`external_change_detected` event and the current live configuration is snapshotted before
-continuing. This detects out-of-band edits after the fact, but cannot reconstruct a state
-that was overwritten before any snapshot existed.
-
-## 3. Architecture
-
-The v2 server remains a Python FastAPI/FastMCP application on Databricks Apps, mounted at
+The server remains a Python FastAPI/FastMCP application on Databricks Apps, mounted at
 `/mcp` over stateless streamable HTTP.
 
 ```text
-Genie Code
-   │ MCP, calling-user token
-   ▼
-mcp-genie-agent-versioning
-   ├─ OBO Genie client
-   │    ├─ get current Agent + etag
-   │    └─ update Agent with optimistic concurrency
-   └─ app-SP history store
-        ├─ agent_config_versions
-        └─ agent_change_events
+Genie Code native tools
+   ├─ read/update/rollback Genie Agent
+   └─ call versioning MCP
+             │
+             ▼
+      mcp-genie-agent-versioning
+             │ OBO SQL only
+             ▼
+      UC agent_config_versions
 ```
 
-Identity is deliberately split:
+All version reads and writes use the caller's OBO identity through a SQL warehouse. The
+app service principal is used only for schema/table provisioning.
 
-- **OBO user identity for Genie Agent API calls.** The server reads and updates the Agent
-  as the caller, so Databricks remains the source of truth for Agent authorization.
-- **App service principal for history SQL.** The history tables are shared service state
-  and are not granted directly to end users. The server records the caller identity it
-  resolved from the forwarded token.
+Required user OAuth scope: `sql`. The MCP needs no `dashboards.genie` scope and no Genie
+Agent resource binding because it makes no Genie API calls.
 
-This model replaces v1's per-user `only_mine` row filters. Collaborators who can access
-the same Agent see the same version history, while users cannot read another Agent's
-history merely because they can query the backing tables. Every read tool first verifies
-access to the requested Agent through an OBO Genie API call.
+### Privacy model
 
-Required user OAuth scope: `dashboards.genie` plus the default current-user identity
-scope. The user token does not need `sql`; SQL runs as the app service principal. The app
-SP needs `CAN USE` on the warehouse and the minimum UC privileges on the history schema.
+Without calling the Genie API, the MCP cannot verify that a caller is authorized on an
+arbitrary Agent. The safe default is therefore private per-user history, enforced by a UC
+row filter on `created_by = SESSION_USER()`.
+
+This means collaborators do not automatically share versions even when they share an
+Agent. Team-shared history requires a separate, explicit authorization design; it must
+not be enabled merely by removing the row filter, because that could expose configuration
+snapshots for Agents a caller cannot access.
 
 ## 4. MCP tool surface
 
-Ship four focused tools:
+Ship three focused tools.
 
-### `apply_agent_config_change`
+### `save_agent_config_version`
 
-Apply a new complete configuration through the guarded workflow.
+Persist one complete configuration snapshot supplied by Genie Code.
 
 Inputs:
 
-- `agent_id`
-- `desired_config` — complete restorable configuration envelope
-- `operation_id` — caller-generated unique id, required for safe retry
-- `change_summary`
-- `expected_current_version_id?` — optional history-level compare-and-swap
+- `space_id`
+- `config` — complete restorable configuration, including its capture-time `etag` when
+  available
+- `reason` — `before_update`, `before_rollback`, or `manual`
+- `change_summary?` — brief, single-line summary of the intended change (maximum 200
+  characters)
 
 Returns:
 
-- `operation_id`
-- `status`
-- `before_version_id`
-- `after_version_id`
-- `result_etag`
-- structured recovery information when the operation is incomplete
+- `ok: true`
+- `version_id`
+- `created_at`
+- `created_by`
+- `config_hash`
 
-### `rollback_agent_config`
-
-Restore a stored version through the same internal mutation engine. This is a dedicated
-tool so intent is explicit and rollback-specific validation cannot be omitted.
-
-Inputs: `agent_id`, `target_version_id`, `operation_id`, `change_summary?`.
-
-The server reads the current live Agent immediately before the update and uses that
-**live** etag for optimistic concurrency. The historical version's captured etag is
-provenance only and must never be used as the rollback update lock.
+The server generates the version id, timestamp, authenticated creator, envelope format
+version, and hash. `created_by` is derived from the OBO identity and is never accepted as
+tool input. Every successful call creates a distinct version, even if its configuration
+is identical to an older version.
 
 ### `list_agent_versions`
 
-List configuration versions for one Agent using cursor pagination. Inputs:
-`agent_id`, `limit?`, `cursor?`. The cursor is based on `(created_at, version_id)`, not an
-ambiguous timestamp-only `since` filter.
+List versions for one Agent using cursor pagination.
+
+Inputs: `space_id`, `limit?`, `cursor?`.
+
+Returns summary rows including `version_id`, `reason`, `created_at`, `created_by`,
+`config_hash`, and `change_summary`. The cursor is based on
+`(created_at, version_id)`.
 
 ### `get_agent_version`
 
-Retrieve one version with both `agent_id` and `version_id`. The resource scope is
-required so a version from one Agent cannot accidentally be applied to another.
+Retrieve one complete version.
+
+Inputs: `space_id`, `version_id`.
+
+Both identifiers are required so a version from one Agent is not accidentally selected
+for another. The returned configuration's historical `etag` is explicitly labeled as
+provenance, not a valid lock for a future update.
 
 ## 5. Complete snapshot contract
 
@@ -179,178 +169,125 @@ A version stores a complete, validated, restorable envelope—not only
 ```json
 {
   "format_version": 1,
-  "agent_id": "...",
+  "space_id": "...",
   "serialized_space": "{...}",
   "title": "...",
   "description": "...",
   "warehouse_id": "...",
-  "parent_path": "..."
+  "parent_path": "...",
+  "etag": "..."
 }
 ```
 
-The exact outer fields must be verified against the current Genie API before
-implementation. Newly introduced restorable fields must be preserved through a
-forward-compatible `config_envelope` rather than silently dropped.
+The exact outer fields must be verified against the current native Genie Code read/update
+contract before implementation. Newly introduced restorable fields must be preserved in
+a forward-compatible envelope rather than silently dropped.
 
 Validation rules:
 
-- `agent_id` in the envelope must match the tool's `agent_id`.
-- `serialized_space` must parse as JSON and satisfy known Genie structural constraints.
-- Unknown envelope fields are preserved when safe; unsupported mutation fields fail
-  explicitly.
+- `serialized_space` must parse as JSON and satisfy known structural constraints.
+- Unknown envelope fields are preserved when safe.
 - Payload size is bounded.
-- The hash is computed over a canonical representation of the complete envelope.
-- Parent and rollback references must exist and belong to the same Agent.
+- `change_summary`, when provided, must be a single line of at most 200 characters.
+- Hashing uses a canonical representation of the restorable configuration fields and
+  excludes the historical `etag`.
+- `reason` must be one of the three documented values.
+
+Because the MCP does not read the Agent, it validates shape but cannot prove
+that a supplied envelope is the current live configuration. That remains part of the
+Genie Code prompt contract.
 
 ## 6. Data model
 
-### `agent_config_versions`
+One table is sufficient for the core service:
 
 ```sql
-version_id             STRING NOT NULL,
-agent_id               STRING NOT NULL,
-operation_id           STRING NOT NULL,
-phase                  STRING NOT NULL, -- before | after
-change_type            STRING NOT NULL, -- update | rollback | import
-parent_version_id      STRING,
-rollback_reference     STRING,
-config_envelope        STRING NOT NULL,
-config_hash            STRING NOT NULL,
-captured_etag          STRING,
-change_summary         STRING,
-created_at             TIMESTAMP NOT NULL,
-created_by             STRING NOT NULL
+CREATE TABLE agent_config_versions (
+  version_id          STRING    NOT NULL,
+  space_id            STRING    NOT NULL,
+  reason              STRING    NOT NULL,
+  config_envelope     STRING    NOT NULL,
+  config_hash         STRING    NOT NULL,
+  change_summary      STRING,
+  created_at          TIMESTAMP NOT NULL,
+  created_by          STRING    NOT NULL
+) USING DELTA;
 ```
 
 Every snapshot event gets a new `version_id`, even when its content hash matches an older
-version. `config_hash` is an integrity/content comparison value, not an idempotency key.
-Idempotency is keyed by `(operation_id, phase)`.
+version. `config_hash` is an integrity/content-comparison value, not an idempotency key or
+version identity.
 
-### `agent_change_events`
+## 7. Native edit workflow
 
-Append one event for each operation transition:
+For a normal update, Genie Code follows this sequence:
 
-```sql
-event_id               STRING NOT NULL,
-operation_id           STRING NOT NULL,
-agent_id               STRING NOT NULL,
-event_type             STRING NOT NULL,
-before_version_id      STRING,
-after_version_id       STRING,
-live_etag              STRING,
-error_type             STRING,
-error_message          STRING,
-created_at             TIMESTAMP NOT NULL,
-created_by             STRING NOT NULL
-```
+1. Read the complete live configuration and live etag with native tools.
+2. Call `save_agent_config_version(reason="before_update")`.
+3. If the save fails, stop. Do not edit.
+4. Apply the desired configuration using native tools and the appropriate live etag.
 
-Event types include `started`, `external_change_detected`, `before_snapshot_saved`,
-`update_succeeded`, `after_snapshot_saved`, `conflict`, and `failed`. This append-only
-operation log supports recovery even though the Genie API and UC storage cannot share a
-database transaction.
+The MCP is not part of step 1 or step 4.
 
-## 7. Mutation state machine
+## 8. Rollback workflow
 
-`apply_agent_config_change` and `rollback_agent_config` use the same engine:
+Rollback is executed entirely by Genie Code's native tools:
 
-1. Resolve the OBO caller and validate inputs.
-2. Check `operation_id`. If already complete, return the original result. If incomplete,
-   resume from durable events rather than starting another mutation.
-3. Read the live Agent and live etag through OBO.
-4. Compare the live configuration hash with the latest stored after-version. Mark an
-   out-of-band mismatch so it can be recorded after the before-version is durable.
-5. Persist a unique before-version and `before_snapshot_saved` event. If step 4 found a
-   mismatch, also append `external_change_detected` referencing this before-version.
-6. If persistence fails, return `snapshot_failed`; do not call the update API.
-7. Update the Agent with the etag read in step 3.
-8. On an etag conflict, append `conflict`; do not retry against a new live configuration
-   automatically.
-9. On success, append `update_succeeded`, read the Agent again, and persist the unique
-   after-version.
-10. Return success only after the after-version is durable.
+1. Call `list_agent_versions(space_id)` and select a target.
+2. Call `get_agent_version(space_id, target_version_id)`.
+3. Read the current live Agent configuration and live etag with native tools.
+4. Save the current state with reason `before_rollback`.
+5. If the save fails, stop. Do not roll back.
+6. Apply the target envelope with native tools using the **current live etag**, not the
+   target version's captured etag.
 
-If the update succeeds but the after snapshot fails, return
-`changed_but_post_snapshot_incomplete`. A retry with the same `operation_id` must inspect
-the durable events and live config, finish the after snapshot when unambiguous, and never
-apply the desired config a second time.
-
-## 8. Rollback semantics
-
-Rollback is an ordinary forward change:
-
-1. Authorize access to `agent_id` through OBO.
-2. Retrieve and validate `target_version_id` for that Agent.
-3. Read and snapshot the current live configuration.
-4. Apply the target envelope using the current live etag.
-5. Read and snapshot the resulting configuration.
-6. Link the new after-version to both the live before-version and
-   `rollback_reference=target_version_id`.
-
-Older rows are immutable. A rollback can itself be rolled back.
+Rollback never deletes history. The `before_rollback` snapshot preserves the current
+state, so the rollback can itself be undone later.
 
 ## 9. Failure and security rules
 
-- Never silently fall back from OBO to app-SP for Agent API calls.
-- Never accept `created_by` from tool input.
+- The MCP must contain no Genie API client or Agent update code.
+- Never accept `created_by` or `created_at` from tool input.
 - Never log forwarded access tokens or full configuration payloads.
-- Do not return history until OBO Agent access has been verified.
-- A validation error or before-snapshot error must make zero update calls.
-- A stale etag is a conflict, not a reason to force an unconditional update.
-- Health/readiness must report history-store bootstrap failures; the app must not claim
-  ready while guarded mutations cannot persist snapshots.
-- Backing tables are app-only. End users receive history exclusively through MCP tools.
+- Reject invalid snapshot reasons.
+- A failed before-save is a blocking result for Genie Code.
+- Clearly distinguish the stored historical etag from the fresh live etag needed for an
+  update.
+- All snapshot writes are append-only; a pre-rollback snapshot creates a new row.
+- Health/readiness must not claim ready while snapshots cannot be persisted.
 
-## 10. Native Genie Code prompt contract
-
-No repository-managed skill files are required. The user or workspace administrator
-adds the instruction from §2.2 to the prompt/instructions supplied to native Genie Code.
-The MCP's own tool descriptions reinforce the same routing rule.
-
-Tool descriptions must state:
-
-- Use `apply_agent_config_change` for every configuration edit.
-- Use `rollback_agent_config` for every restore.
-- Never perform a separate native update before or after either tool.
-- Treat `snapshot_failed`, `conflict`, and incomplete-post-snapshot statuses as blocking.
-
-This is a best-effort client contract. `CAN MANAGE` and Auto-Approve still permit native
-edits that bypass the MCP, so documentation and user-visible status must not describe the
-system as universally enforced.
-
-## 11. Migration from v1
+## 10. Migration from v1
 
 The current code is a passive history implementation with five generic artifact tools
-and seven tables. It must not be relabeled v2 without the gateway behavior.
+and seven tables. V2 keeps the storage-only boundary but narrows the contract to Agent
+configuration versioning.
 
 Migration steps:
 
-1. Add the two v2 tables with an explicit schema version and migration mechanism.
-2. Implement the shared guarded mutation engine and operation recovery.
-3. Replace generic artifact tools with the four v2 tools.
-4. Remove v1 per-user row filters and direct user grants from the v2 tables.
-5. Optionally import valid v1 config snapshots as `change_type=import`, preserving the
-   original creator/time and marking missing outer metadata as non-restorable.
-6. Retire report/evaluation tables from the core service; preserve existing data unless
-   an operator explicitly migrates or archives it.
+1. Add `agent_config_versions` with an explicit schema version/migration mechanism.
+2. Implement the three v2 tools and the simplified save contract.
+3. Keep OBO SQL and per-user row isolation.
+4. Import valid v1 snapshots only when a complete restorable envelope can be constructed;
+   otherwise preserve them as legacy partial records, not rollback targets.
+5. Retire report/evaluation tools from the core service while preserving existing data.
 
 Existing deployments may retain the `genie_space_history` schema during migration. New
 deployments should default to `genie_agent_versioning`; changing an existing schema name
-is an explicit data migration, never an automatic rename.
+is an explicit data migration.
 
-## 12. Acceptance criteria
+## 11. Acceptance criteria
 
-- A failed before snapshot results in zero Genie update calls.
-- Every successful update has durable before and after versions linked by one operation.
-- Repeating the same `operation_id` never applies the mutation twice.
-- Two concurrent edits produce at most one success for a shared starting etag.
-- Rollback restores the complete envelope and uses a freshly read live etag.
-- Identical content at different points in history produces distinct version rows.
-- History is shared among collaborators authorized on the Agent and inaccessible to
-  callers who cannot access that Agent.
-- A successful update followed by a storage outage is detectable and recoverable.
-- The recommended Genie Code prompt is documented and tested in an end-to-end session,
-  including with Auto-Approve enabled.
-- An out-of-band native edit is detected and captured on the next MCP mutation.
+- The MCP makes zero Genie API calls and contains no mutation tool.
+- Invalid or incomplete envelopes cannot be stored as rollback-ready versions.
+- Every successful save creates a distinct version, including repeated identical content.
+- `created_by` always matches the authenticated OBO user and cannot be supplied by the
+  caller.
+- Multiline or over-200-character change summaries are rejected.
+- List pagination is deterministic and every get is scoped by `space_id`.
+- A stored version contains every field required by Genie Code's native restore path.
+- The recommended prompt is tested end-to-end for update and rollback, including with
+  Auto-Approve enabled.
+- Tests prove the prompt workflow stops before a native edit when the before-save fails.
 
-Describe the system as a **prompt-routed guarded versioning gateway**, not as universally
-enforced versioning.
+Describe the system as a **prompt-routed configuration version store**, not as an update
+gateway or universally enforced versioning system.

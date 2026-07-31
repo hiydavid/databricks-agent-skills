@@ -1,7 +1,8 @@
 # Genie Agent Versioning MCP — server (`app/`)
 
 > **Legacy v1 implementation:** this app passively stores caller-supplied snapshots.
-> It does not yet implement the v2 guarded mutation gateway in the authoritative design.
+> It does not yet implement the narrower v2 configuration-version contract in the
+> authoritative design.
 
 Production server for the Genie Agent Versioning MCP, deployed on **Databricks Apps**
 and mounted at **`/mcp`** over stateless streamable HTTP. It persists the artifacts
