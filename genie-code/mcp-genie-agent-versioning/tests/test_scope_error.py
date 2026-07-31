@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
-
 import pytest
 
 from server import auth, tools
@@ -30,13 +28,6 @@ def test_missing_obo_token_returns_scope_error(monkeypatch, settings, no_obo_tok
     assert result["ok"] is False
     assert result["error_type"] == "scope_error"
     assert result["required_scope"] == "sql"
-
-
-def test_disabled_obo_returns_scope_error(monkeypatch, settings):
-    monkeypatch.setenv("DATABRICKS_APP_NAME", "mcp-genie-agent-versioning")
-    disabled = dataclasses.replace(settings, obo_enabled=False)
-    result = tools._run_tool(disabled, "list_agent_versions", lambda _store: {})
-    assert result["error_type"] == "scope_error"
 
 
 def test_user_store_does_not_call_identity_api(monkeypatch, settings, backend):
@@ -71,4 +62,4 @@ def test_uc_grant_denial_is_not_mislabeled():
 def test_auth_helper_never_falls_back_to_app_identity(monkeypatch, no_obo_token):
     monkeypatch.setenv("DATABRICKS_APP_NAME", "mcp-genie-agent-versioning")
     with pytest.raises(OBOScopeError):
-        auth.get_user_workspace_client(obo_enabled=True)
+        auth.get_user_workspace_client()

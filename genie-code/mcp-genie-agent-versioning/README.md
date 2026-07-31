@@ -237,7 +237,6 @@ Smoke-test in this order:
 | `HISTORY_GRANTEE` | UC principal receiving OBO table access: a user email or account-level group. |
 | `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED` | Confirmation that the principal already has effective `USE CATALOG`, directly or through inheritance. |
 | `SQL_WAREHOUSE_ID` | SQL warehouse resource injected from `sql-warehouse`. |
-| `OBO_ENABLED` | User-authorization feature flag; defaults to `true`. |
 | `MAX_CONFIG_BYTES` | Maximum UTF-8 envelope size; defaults to 5 MiB. |
 | `TRANSFER_OWNERSHIP` | Opt-in durable group ownership handoff; defaults to `false`. |
 | `HISTORY_OWNER_GROUP` | Required only when ownership transfer is enabled. |

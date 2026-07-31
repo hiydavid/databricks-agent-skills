@@ -20,8 +20,6 @@ env:
     value: "false"
   - name: SQL_WAREHOUSE_ID
     valueFrom: "sql-warehouse"
-  - name: OBO_ENABLED
-    value: "true"
   - name: MAX_CONFIG_BYTES
     value: "5242880"
   # Leave ownership with the app SP for a test deployment so bootstrap remains

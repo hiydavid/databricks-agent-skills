@@ -8,8 +8,8 @@
     for a user write (spec §5).
 
 The middleware in ``app.py`` stashes the OBO token in a ``ContextVar``; tools read
-it here. On a missing token / disabled OBO, :func:`get_user_workspace_client`
-raises :class:`OBOScopeError` so the tool can return a structured ``scope_error``.
+it here. On a missing token, :func:`get_user_workspace_client` raises
+:class:`OBOScopeError` so the tool can return a structured ``scope_error``.
 """
 
 from __future__ import annotations
@@ -41,24 +41,18 @@ def get_app_workspace_client() -> WorkspaceClient:
     return WorkspaceClient()
 
 
-def get_user_workspace_client(*, obo_enabled: bool = True) -> WorkspaceClient:
+def get_user_workspace_client() -> WorkspaceClient:
     """On-Behalf-Of-User client built from the forwarded user token (spec §5).
 
-    Raises :class:`OBOScopeError` when the token is absent or OBO is disabled —
-    the tool turns that into a ``scope_error`` for the user; it does NOT fall back
-    to the app SP for a user-scoped write.
+    Raises :class:`OBOScopeError` when the token is absent. The tool turns that into
+    a ``scope_error`` for the user; it does NOT fall back to the app SP for a
+    user-scoped write.
 
     Outside a deployed App (local dev / tests), returns the developer identity so
     the same code path is exercisable without the forwarded header.
     """
     if not running_in_app():
         return WorkspaceClient()
-
-    if not obo_enabled:
-        raise OBOScopeError(
-            "On-Behalf-Of-User auth is disabled for this server (OBO_ENABLED=false). "
-            "User-scoped reads/writes require OBO.",
-        )
 
     token = obo_token_var.get()
     if not token:

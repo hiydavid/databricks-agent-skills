@@ -41,7 +41,6 @@ class Settings:
     history_owner_group: str = ""
     transfer_ownership: bool = False
     grantee_use_catalog_confirmed: bool = False
-    obo_enabled: bool = True
     max_config_bytes: int = DEFAULT_MAX_CONFIG_BYTES
 
     @property
@@ -63,7 +62,6 @@ class Settings:
             grantee_use_catalog_confirmed=_as_bool(
                 env.get("HISTORY_GRANTEE_USE_CATALOG_CONFIRMED"), default=False
             ),
-            obo_enabled=_as_bool(env.get("OBO_ENABLED"), default=True),
             max_config_bytes=_as_positive_int(
                 env.get("MAX_CONFIG_BYTES"), default=DEFAULT_MAX_CONFIG_BYTES
             ),
@@ -92,6 +90,5 @@ class Settings:
             "sql_warehouse_id": self.sql_warehouse_id,
             "transfer_ownership": self.transfer_ownership,
             "grantee_use_catalog_confirmed": self.grantee_use_catalog_confirmed,
-            "obo_enabled": self.obo_enabled,
             "max_config_bytes": self.max_config_bytes,
         }

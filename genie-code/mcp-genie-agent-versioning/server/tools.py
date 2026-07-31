@@ -183,7 +183,7 @@ def get_agent_version_core(
 
 def _build_user_store(settings: Settings) -> AgentVersionStore:
     """Build an OBO SQL store without making a separate identity API call."""
-    workspace = auth.get_user_workspace_client(obo_enabled=settings.obo_enabled)
+    workspace = auth.get_user_workspace_client()
     return AgentVersionStore(make_sql_exec(workspace, settings.sql_warehouse_id), settings)
 
 
