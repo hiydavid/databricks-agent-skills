@@ -52,7 +52,7 @@ rollback.
   and required grantee table access succeed.
 - Legacy v1 tables are never dropped or modified.
 
-## Deploy a test App on Databricks
+## Deploy on Databricks
 
 The deployment choices are FastAPI, combined app/user authorization, one SQL warehouse
 resource, Unity Catalog managed tables, and the Databricks CLI deployment path.
@@ -65,8 +65,8 @@ You need:
 - Permission to create and manage a Databricks App.
 - A running SQL warehouse.
 - A pre-existing Unity Catalog catalog with managed storage.
-- An account-level group containing the test users, for example
-  `genie_versioning_testers`.
+- An account-level group containing the App users, for example
+  `genie_versioning_users`.
 - A catalog owner or metastore administrator who can grant the initial catalog privileges.
 - Databricks Apps user authorization enabled for the workspace.
 
@@ -84,9 +84,9 @@ databricks apps deploy -h
 App names used by Genie Code should start with `mcp-`:
 
 ```bash
-databricks apps create --name mcp-genie-agent-versioning-test \
-  --json '{"description":"Test Genie Agent configuration version store"}'
-databricks apps get mcp-genie-agent-versioning-test
+databricks apps create --name mcp-genie-agent-versioning \
+  --json '{"description":"Genie Agent configuration version store"}'
+databricks apps get mcp-genie-agent-versioning
 ```
 
 If your CLI's `create -h` shows a positional name instead, use that form. Copy the App
@@ -101,12 +101,12 @@ and account-group names:
 GRANT USE CATALOG ON CATALOG <catalog> TO `<app-service-principal>`;
 GRANT CREATE SCHEMA ON CATALOG <catalog> TO `<app-service-principal>`;
 
-GRANT USE CATALOG ON CATALOG <catalog> TO `genie_versioning_testers`;
+GRANT USE CATALOG ON CATALOG <catalog> TO `genie_versioning_users`;
 ```
 
 The last grant must be completed before setting
 `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true`. The App owns the schema it creates and will
-grant the tester group `USE SCHEMA` plus `SELECT, MODIFY` only on the row-filtered version
+grant the user group `USE SCHEMA` plus `SELECT, MODIFY` only on the row-filtered version
 table. It does not need `MANAGE` on the catalog.
 
 For an upgrade that reuses an existing schema, the existing schema owner must additionally
@@ -118,8 +118,8 @@ perform the migration as the owner.
 Edit [`app.yaml`](app.yaml):
 
 - Set `HISTORY_CATALOG` to the catalog from step 3.
-- Leave `HISTORY_SCHEMA=genie_agent_versioning` for a fresh test.
-- Set `HISTORY_GRANTEE=genie_versioning_testers`.
+- Leave `HISTORY_SCHEMA=genie_agent_versioning` for a fresh deployment.
+- Set `HISTORY_GRANTEE=genie_versioning_users`.
 - Set `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true` after the grant in step 3.
 - Set `CORS_ALLOW_ORIGINS` to the exact workspace origin, such as
   `https://dbc-xxxxxxxx-xxxx.cloud.databricks.com`.
@@ -128,7 +128,7 @@ In the App configuration page:
 
 1. Add a **SQL warehouse** resource with key `sql-warehouse` and **CAN USE** permission.
 2. Enable **User authorization** and approve the `sql` scope declared in `app.yaml`.
-3. Give test users **CAN USE** on the App; reserve **CAN MANAGE** for trusted developers.
+3. Give App users **CAN USE** on the App; reserve **CAN MANAGE** for trusted developers.
 
 `SQL_WAREHOUSE_ID` uses `valueFrom: sql-warehouse`; do not replace it with a hardcoded ID.
 
@@ -138,7 +138,7 @@ For deployment from this Git repository, use `genie-code/mcp-genie-agent-version
 the source directory (relative to the repository root):
 
 ```bash
-databricks apps deploy mcp-genie-agent-versioning-test \
+databricks apps deploy mcp-genie-agent-versioning \
   --json '{"git_source":{"branch":"main","source_code_path":"genie-code/mcp-genie-agent-versioning"}}'
 ```
 
@@ -148,15 +148,15 @@ path:
 
 ```bash
 databricks workspace mkdirs \
-  /Workspace/Users/<user-email>/apps/mcp-genie-agent-versioning-test
+  /Workspace/Users/<user-email>/apps/mcp-genie-agent-versioning
 
 databricks workspace import-dir . \
-  /Workspace/Users/<user-email>/apps/mcp-genie-agent-versioning-test \
+  /Workspace/Users/<user-email>/apps/mcp-genie-agent-versioning \
   --overwrite
 
-databricks apps deploy mcp-genie-agent-versioning-test \
+databricks apps deploy mcp-genie-agent-versioning \
   --source-code-path \
-  /Workspace/Users/<user-email>/apps/mcp-genie-agent-versioning-test
+  /Workspace/Users/<user-email>/apps/mcp-genie-agent-versioning
 ```
 
 Always include `--overwrite` on redeploy; otherwise changed workspace files may be skipped.
@@ -164,8 +164,8 @@ Always include `--overwrite` on redeploy; otherwise changed workspace files may 
 ### 6. Verify provisioning and readiness
 
 ```bash
-databricks apps get mcp-genie-agent-versioning-test
-databricks apps logs mcp-genie-agent-versioning-test
+databricks apps get mcp-genie-agent-versioning
+databricks apps logs mcp-genie-agent-versioning
 ```
 
 Open the App URL while authenticated:
@@ -220,8 +220,8 @@ tools are no longer registered.
   promoted to rollback-ready v2 versions without the missing outer fields. They remain
   available as legacy partial records in `config_snapshots`.
 - Fresh deployments default to `genie_agent_versioning`.
-- Keep `TRANSFER_OWNERSHIP=false` while testing and while automatic migrations may still
-  run. A production operator can enable a one-time transfer to a durable owner group after
+- Keep `TRANSFER_OWNERSHIP=false` during initial validation and while automatic migrations
+  may still run. An operator can enable a one-time transfer to a durable owner group after
   ensuring that owner will perform future migrations.
 
 ## Configuration
@@ -250,4 +250,4 @@ uvx --with databricks-sdk --with fastapi --with fastmcp \
 ```
 
 Local startup skips Databricks provisioning, so `/readyz` intentionally returns 503. Use
-unit tests for the local loop and a deployed test App for OBO/readiness verification.
+unit tests for the local loop and a deployed App for OBO/readiness verification.
