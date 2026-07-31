@@ -6,6 +6,8 @@ envelopes in Unity Catalog, and never reads or updates a live Genie Agent.
 
 Genie Code remains responsible for reading the live configuration, saving it here before
 an edit, stopping if that save fails, and applying edits or rollbacks with native tools.
+The contract and responsibility boundary are documented in
+[`../genie-agent-versioning-mcp-design.md`](../genie-agent-versioning-mcp-design.md).
 
 ## MCP tools
 
@@ -130,9 +132,19 @@ In the App configuration page:
 
 `SQL_WAREHOUSE_ID` uses `valueFrom: sql-warehouse`; do not replace it with a hardcoded ID.
 
-### 5. Upload and deploy
+### 5. Deploy
 
-Run these commands from this `app/` directory, replacing the workspace user path:
+For deployment from this Git repository, use `genie-code/mcp-genie-agent-versioning` as
+the source directory (relative to the repository root):
+
+```bash
+databricks apps deploy mcp-genie-agent-versioning-test \
+  --json '{"git_source":{"branch":"main","source_code_path":"genie-code/mcp-genie-agent-versioning"}}'
+```
+
+Alternatively, upload a local checkout through the Databricks workspace. Run these
+commands from the `mcp-genie-agent-versioning/` directory, replacing the workspace user
+path:
 
 ```bash
 databricks workspace mkdirs \
