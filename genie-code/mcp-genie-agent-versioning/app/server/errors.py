@@ -81,10 +81,9 @@ def looks_like_scope_error(exc: Exception) -> bool:
 
     The definitive scope signal is the absent OBO token (handled in ``auth`` via
     :class:`OBOScopeError`). This also catches the token-level authorization
-    failures a deployed app hits when its OBO token defaults to identity-only
-    scopes (spec §5, P0 finding F-6) — including the SDK ``Unauthenticated`` (401)
-    raised while resolving the caller's identity. ``PermissionDenied`` (403, a UC
-    grant denial) is intentionally NOT treated as a scope error.
+    failures raised by SQL when a deployed app receives a token without the required
+    scope. ``PermissionDenied`` (403, a UC grant denial) is intentionally NOT treated
+    as a scope error.
     """
     if type(exc).__name__ in _SCOPE_EXCEPTION_NAMES:
         return True

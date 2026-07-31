@@ -2,8 +2,8 @@
 # requirements.txt at deploy; this file is for the dev inner loop and CI (P4).
 [project]
 name = "mcp-genie-agent-versioning"
-version = "0.1.0"
-description = "Genie Agent Versioning MCP server (P1 — write + read) on Databricks Apps"
+version = "2.0.0"
+description = "Prompt-routed Genie Agent configuration version store on Databricks Apps"
 requires-python = ">=3.11"
 dependencies = [
     "databricks-sdk>=0.118.0",

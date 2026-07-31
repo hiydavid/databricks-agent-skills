@@ -1,13 +1,4 @@
-"""FastAPI + FastMCP application (spec §3 / §10).
-
-* ``mcp_server.http_app(path="/mcp", stateless_http=True)`` → the MCP server
-  mounted at ``/mcp`` over stateless streamable HTTP (Genie Code requirement).
-* A middleware captures ``X-Forwarded-Access-Token`` into a ContextVar for OBO;
-  it is reset after each request so it never leaks across requests.
-* CORS is allow-listed to the workspace origin(s) from ``CORS_ALLOW_ORIGINS``.
-* On startup the app SP runs the idempotent bootstrap (schema/tables/filter/
-  ownership/grants); failures are logged but never crash startup (spec §7.1).
-"""
+"""FastAPI/FastMCP application and persistence-aware readiness endpoints."""
 
 from __future__ import annotations
 
@@ -16,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastmcp import FastMCP
 
 from . import auth, provisioning
@@ -27,6 +19,12 @@ logger = logging.getLogger("mcp-genie-agent-versioning")
 
 settings = Settings.from_env()
 
+readiness: dict[str, object] = {
+    "ready": False,
+    "message": "startup bootstrap has not completed",
+    "bootstrap": None,
+}
+
 mcp_server = FastMCP(name="mcp-genie-agent-versioning")
 register_tools(mcp_server, settings)
 
@@ -35,27 +33,47 @@ register_tools(mcp_server, settings)
 mcp_app = mcp_server.http_app(path="/mcp", stateless_http=True)
 
 
-def _run_startup_bootstrap() -> None:
-    """Provision UC objects as the app SP (best-effort; never raises)."""
+def _set_readiness(*, ready: bool, message: str, bootstrap: object = None) -> None:
+    readiness.update({"ready": ready, "message": message, "bootstrap": bootstrap})
+
+
+def _run_startup_bootstrap() -> dict:
+    """Provision UC objects as the app SP and update persistence readiness."""
     missing = settings.missing_required()
     if missing:
-        logger.warning("bootstrap skipped: missing required env: %s", ", ".join(missing))
-        return
+        message = "bootstrap skipped: missing required env: " + ", ".join(missing)
+        logger.error(message)
+        report = {"ok": False, "errors": [message]}
+        _set_readiness(ready=False, message=message, bootstrap=report)
+        return report
     try:
         report = provisioning.bootstrap(auth.get_app_workspace_client(), settings)
         logger.info("bootstrap report: %s", report)
         if report.get("warnings"):
             logger.warning("bootstrap warnings: %s", report["warnings"])
         if not report.get("ok"):
-            # Row isolation / table creation incomplete — grantee access may be withheld.
             logger.error(
-                "bootstrap NOT ok: errors=%s grants_withheld=%s — row isolation incomplete; "
-                "an operator must resolve before relying on per-user history",
+                "bootstrap NOT ok: errors=%s — persistence or row isolation incomplete; "
+                "an operator must resolve this before the App becomes ready",
                 report.get("errors"),
-                report.get("grants_withheld"),
             )
+            _set_readiness(
+                ready=False,
+                message="configuration snapshots cannot currently be persisted",
+                bootstrap=report,
+            )
+        else:
+            _set_readiness(
+                ready=True,
+                message="configuration version storage is ready",
+                bootstrap=report,
+            )
+        return report
     except Exception as exc:  # noqa: BLE001 — startup must survive bootstrap failures
         logger.exception("bootstrap failed (continuing startup): %s", exc)
+        report = {"ok": False, "errors": [str(exc)]}
+        _set_readiness(ready=False, message="bootstrap failed", bootstrap=report)
+        return report
 
 
 @asynccontextmanager
@@ -66,27 +84,50 @@ async def lifespan(app: FastAPI):
         _run_startup_bootstrap()
     else:
         logger.info("not running in a Databricks App; skipping startup bootstrap")
+        _set_readiness(
+            ready=False,
+            message="local process: Databricks App provisioning was not run",
+        )
     async with mcp_app.lifespan(app):
         yield
 
 
-api = FastAPI(title="mcp-genie-agent-versioning", version="0.1.0")
+api = FastAPI(title="mcp-genie-agent-versioning", version="2.0.0")
 
 
 @api.get("/", include_in_schema=False)
 async def root() -> dict:
-    return {"message": "Genie Agent Versioning MCP running", "mcp_endpoint": "/mcp"}
+    return {
+        "message": "Genie Agent Versioning MCP running",
+        "version": "2.0.0",
+        "mcp_endpoint": "/mcp",
+        "ready": readiness["ready"],
+    }
 
 
 @api.get("/healthz", include_in_schema=False)
 async def healthz() -> dict:
-    return {"status": "healthy", "config": settings.as_public_dict()}
+    return {"status": "healthy", "check": "liveness"}
+
+
+@api.get("/readyz", include_in_schema=False)
+async def readyz() -> JSONResponse:
+    ready = bool(readiness["ready"])
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={
+            "status": "ready" if ready else "not_ready",
+            "message": readiness["message"],
+            "config": settings.as_public_dict(),
+            "bootstrap": readiness["bootstrap"],
+        },
+    )
 
 
 # Combine the MCP protocol routes with the custom API routes under one app.
 app = FastAPI(
     title="Genie Agent Versioning MCP",
-    version="0.1.0",
+    version="2.0.0",
     routes=[*mcp_app.routes, *api.routes],
     lifespan=lifespan,
 )

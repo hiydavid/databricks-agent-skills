@@ -1,12 +1,4 @@
-"""Test fixtures — a fully in-memory SQL backend so tests need NO live workspace.
-
-:class:`InMemoryBackend` is a fake :data:`~server.sql.SqlExec`: it records every
-statement + bound params, simulates ``INSERT`` (stores the row keyed by its logical
-PK) and ``SELECT ... WHERE pk = :id LIMIT 1`` (the store's idempotency dedupe /
-get_artifact lookup). This lets the store and tool logic be exercised end-to-end
-against real SQL strings + bound parameters, without the Databricks SDK ever making
-a network call.
-"""
+"""In-memory SQL fixtures for the v2 store and tool contract."""
 
 from __future__ import annotations
 
@@ -19,38 +11,30 @@ import pytest
 from server import schema
 from server.config import Settings
 from server.sql import Param, QueryResult
-from server.store import UCTableStore
+from server.store import AgentVersionStore
 
-# `cat`.`schema`.`table` — capture the table name (3rd backtick-quoted part).
 _TABLE_RE = re.compile(r"`[^`]+`\.`[^`]+`\.`([^`]+)`")
 
 
 def param_value(params: Sequence[Param], name: str) -> Optional[str]:
-    for p in params:
-        if p.name == name:
-            return p.value
+    for parameter in params:
+        if parameter.name == name:
+            return parameter.value
     return None
 
 
 def _table_of(sql: str) -> Optional[str]:
-    m = _TABLE_RE.search(sql)
-    return m.group(1) if m else None
-
-
-_ID_COLUMN = {spec.name: spec.id_column for spec in schema.TABLE_SPECS}
+    match = _TABLE_RE.search(sql)
+    return match.group(1) if match else None
 
 
 class InMemoryBackend:
-    """A stateful fake SqlExec simulating the genie_space_history tables."""
-
     def __init__(self) -> None:
         self.calls: list[tuple[str, list[Param]]] = []
-        # table_name -> id_value -> row dict (col -> value)
         self.rows: dict[str, dict[str, dict]] = defaultdict(dict)
-        # configurable canned result for list_history queries
-        self.list_result = QueryResult([], [])
+        self.list_result: Optional[QueryResult] = None
+        self.clock = 0
 
-    # --- call recording helpers -------------------------------------------
     def inserts_into(self, table_name: str) -> list[tuple[str, list[Param]]]:
         return [
             (sql, params)
@@ -58,33 +42,51 @@ class InMemoryBackend:
             if sql.lstrip().startswith("INSERT") and _table_of(sql) == table_name
         ]
 
-    def all_inserts(self) -> list[tuple[str, list[Param]]]:
-        return [(sql, params) for sql, params in self.calls if sql.lstrip().startswith("INSERT")]
-
-    # --- the SqlExec interface --------------------------------------------
     def __call__(self, sql: str, parameters: Optional[Sequence[Param]] = None) -> QueryResult:
         params = list(parameters or [])
         self.calls.append((sql, params))
         stripped = sql.lstrip()
 
-        if "ORDER BY created_at DESC" in sql:  # list_history
-            return self.list_result
+        if "ORDER BY created_at DESC, version_id DESC" in sql:
+            if self.list_result is not None:
+                return self.list_result
+            rows = [
+                row
+                for row in self.rows[schema.AGENT_CONFIG_VERSIONS].values()
+                if row["space_id"] == param_value(params, "space_id")
+            ]
+            rows.sort(key=lambda row: (row["created_at"], row["version_id"]), reverse=True)
+            columns = [
+                "version_id",
+                "reason",
+                "created_at",
+                "created_by",
+                "config_hash",
+                "change_summary",
+                "parent_version_id",
+                "rollback_target_version_id",
+            ]
+            return QueryResult(columns, [[row.get(column) for column in columns] for row in rows])
 
-        if stripped.startswith("SELECT *") and "LIMIT 1" in sql:  # _find_by_id / get_artifact
-            table = _table_of(sql)
-            id_value = param_value(params, "id")
-            row = self.rows.get(table or "", {}).get(id_value or "")
-            if row is None:
+        if stripped.startswith("SELECT") and "version_id = :version_id" in sql:
+            version_id = param_value(params, "version_id") or ""
+            row = self.rows[schema.AGENT_CONFIG_VERSIONS].get(version_id)
+            if row is None or row["space_id"] != param_value(params, "space_id"):
                 return QueryResult([], [])
-            return QueryResult(list(row.keys()), [list(row.values())])
+            columns = list(row.keys())
+            return QueryResult(columns, [[row[column] for column in columns]])
 
-        if stripped.startswith("INSERT"):
-            table = _table_of(sql) or ""
-            row = {p.name: p.value for p in params}
-            id_col = _ID_COLUMN.get(table)
-            key = row.get(id_col) if id_col else None
-            if key is not None:
-                self.rows[table][key] = row
+        if stripped.startswith("INSERT") and _table_of(sql) == schema.AGENT_CONFIG_VERSIONS:
+            row = {parameter.name: parameter.value for parameter in params}
+            self.clock += 1
+            row["created_at"] = f"2026-07-30T12:00:{self.clock:02d}.000Z"
+            row["created_by"] = "alice@example.com"
+            row.setdefault("change_summary", None)
+            row.setdefault("parent_version_id", None)
+            row.setdefault("rollback_target_version_id", None)
+            version_id = row["version_id"]
+            assert isinstance(version_id, str)
+            self.rows[schema.AGENT_CONFIG_VERSIONS][version_id] = row
             return QueryResult([], [])
 
         return QueryResult([], [])
@@ -94,10 +96,10 @@ class InMemoryBackend:
 def settings() -> Settings:
     return Settings(
         history_catalog="testcat",
-        history_owner_group="owner_group",
-        history_grantee="grantee_group",
+        history_schema="genie_agent_versioning",
+        history_grantee="genie_testers",
         sql_warehouse_id="wh123",
-        use_variant=False,
+        grantee_use_catalog_confirmed=True,
     )
 
 
@@ -107,5 +109,17 @@ def backend() -> InMemoryBackend:
 
 
 @pytest.fixture
-def store(backend: InMemoryBackend, settings: Settings) -> UCTableStore:
-    return UCTableStore(backend, settings, user_name="alice@example.com")
+def store(backend: InMemoryBackend, settings: Settings) -> AgentVersionStore:
+    return AgentVersionStore(backend, settings)
+
+
+@pytest.fixture
+def complete_config() -> dict:
+    return {
+        "serialized_space": '{"data_sources":{"tables":[]},"instructions":"baseline"}',
+        "title": "Revenue analyst",
+        "description": "Answers revenue questions",
+        "warehouse_id": "warehouse-1",
+        "parent_path": "/Shared/Genie",
+        "etag": "etag-at-capture",
+    }

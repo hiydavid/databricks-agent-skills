@@ -1,26 +1,23 @@
-"""The P1 write/read MCP tools plus the P2 ``record_optimization_run`` tool (spec §6),
-with their input validation.
-
-Split into two layers so the logic is unit-testable with no live workspace:
-
-  * ``*_core(store, ...)`` — pure functions that validate inputs against the §7
-    contracts and call :class:`~server.store.UCTableStore`. They raise
-    :class:`~server.errors.ToolValidationError` on bad input.
-  * :func:`register_tools` — wraps each core fn with OBO identity resolution and
-    structured error handling, then registers it on the FastMCP server.
-
-All reads/writes run OBO (the calling user). ``created_by``/``created_at`` are
-stamped server-side via SQL ``current_user()``/``current_timestamp()`` (spec §6),
-so ``created_by`` always matches the ``SESSION_USER()`` the row filter compares.
-"""
+"""The three focused v2 MCP tools and their OBO/error wrappers."""
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional
 
-from . import auth, schema
+from . import auth
 from .config import Settings
+from .contracts import (
+    DEFAULT_LIST_LIMIT,
+    decode_cursor,
+    encode_cursor,
+    prepare_envelope,
+    require_nonempty_string,
+    validate_change_summary,
+    validate_limit,
+    validate_reason,
+)
 from .errors import (
     OBOScopeError,
     ToolValidationError,
@@ -30,275 +27,173 @@ from .errors import (
     validation_error_payload,
 )
 from .sql import SqlError, make_sql_exec
-from .store import UCTableStore
+from .store import AgentVersionStore
 
 logger = logging.getLogger("mcp-genie-agent-versioning.tools")
 
 
-def _require(value: Optional[str], name: str) -> str:
-    if value is None or (isinstance(value, str) and not value.strip()):
-        raise ToolValidationError(f"`{name}` is required and must be non-empty.")
-    return value
-
-
-# Allowed keys on an `eval_results[]` entry (spec §7.1 eval_results columns the caller
-# supplies — server-stamped eval_run_id/run_id/space_id/created_* are NOT caller fields).
-_EVAL_STR_FIELDS = (
-    "question_id",
-    "assessment",
-    "primary_failure",
-    "baseline_sql_hash",
-    "candidate_sql_hash",
-    "baseline_result_digest",
-    "candidate_result_digest",
-)
-_EVAL_RESULT_FIELDS = frozenset((*_EVAL_STR_FIELDS, "latency_ms"))
-
-
-def _validate_eval_results(eval_results: Optional[Sequence[Any]]) -> list[dict]:
-    """Validate the shape of each ``eval_results[]`` entry against the §7.1 contract.
-
-    Each entry must be an object whose keys are all recognized eval-result fields; string
-    columns must be strings and ``latency_ms`` an integer. Raises
-    :class:`ToolValidationError` on a malformed entry. Returns the cleaned list (``[]`` when
-    no eval rows were supplied).
-    """
-    if eval_results is None:
-        return []
-    if not isinstance(eval_results, (list, tuple)):
-        raise ToolValidationError("`eval_results` must be a list of objects.")
-    cleaned: list[dict] = []
-    for i, entry in enumerate(eval_results):
-        if not isinstance(entry, dict):
-            raise ToolValidationError(
-                f"eval_results[{i}] must be an object (got {type(entry).__name__})."
-            )
-        unknown = set(entry) - _EVAL_RESULT_FIELDS
-        if unknown:
-            allowed = ", ".join(sorted(_EVAL_RESULT_FIELDS))
-            raise ToolValidationError(
-                f"eval_results[{i}] has unknown field(s): {', '.join(sorted(unknown))}; "
-                f"allowed fields: {allowed}"
-            )
-        latency = entry.get("latency_ms")
-        # bool is an int subclass — reject it explicitly so True/False can't pass as latency.
-        if latency is not None and (isinstance(latency, bool) or not isinstance(latency, int)):
-            raise ToolValidationError(f"eval_results[{i}].latency_ms must be an integer.")
-        for key in _EVAL_STR_FIELDS:
-            value = entry.get(key)
-            if value is not None and not isinstance(value, str):
-                raise ToolValidationError(f"eval_results[{i}].{key} must be a string.")
-        cleaned.append(dict(entry))
-    return cleaned
-
-
-# ---------------------------------------------------------------------------
-# Core tool logic (workspace-free; takes an already-built store)
-# ---------------------------------------------------------------------------
-def save_config_snapshot_core(
-    store: UCTableStore,
+def _require_existing_reference(
+    store: AgentVersionStore,
     *,
     space_id: str,
-    serialized_space: str,
-    etag: Optional[str] = None,
-    version_label: Optional[str] = None,
-    parent_config_version_id: Optional[str] = None,
-    run_id: Optional[str] = None,
-    changed_surfaces: Optional[Sequence[str]] = None,
-    change_summary: Optional[str] = None,
-    rollback_reference: Optional[str] = None,
-    skill_name: Optional[str] = None,
-    idempotency_key: Optional[str] = None,
-) -> dict:
-    _require(space_id, "space_id")
-    _require(serialized_space, "serialized_space")
-
-    # §7.1 config_snapshots has no version_label column. To avoid dropping the
-    # caller-supplied label, fold it into change_summary when no summary was given.
-    effective_summary = change_summary
-    if effective_summary is None and version_label:
-        effective_summary = version_label
-
-    result = store.save_config_snapshot(
-        space_id=space_id,
-        serialized_space=serialized_space,
-        etag=etag,
-        parent_version_id=parent_config_version_id,
-        run_id=run_id,
-        changed_surfaces=changed_surfaces,
-        change_summary=effective_summary,
-        rollback_reference=rollback_reference,
-        skill_name=skill_name,
-        idempotency_key=idempotency_key,
-    )
-    result["ok"] = True
-    return result
-
-
-def save_report_core(
-    store: UCTableStore,
-    *,
-    space_id: str,
-    artifact_type: str,
-    title: str,
-    content_md: str,
-    run_id: Optional[str] = None,
-    scores_findings: Optional[Any] = None,
-    summary: Optional[str] = None,
-    config_version_id: Optional[str] = None,
-    skill_name: Optional[str] = None,
-    redacted: bool = True,
-    idempotency_key: Optional[str] = None,
-) -> dict:
-    _require(space_id, "space_id")
-    _require(artifact_type, "artifact_type")
-    _require(title, "title")
-    _require(content_md, "content_md")
-
-    if artifact_type not in schema.ARTIFACT_TYPE_TO_REPORT_TABLE:
-        valid = ", ".join(sorted(schema.ARTIFACT_TYPE_TO_REPORT_TABLE))
+    version_id: Optional[str],
+    field_name: str,
+) -> Optional[str]:
+    if version_id is None:
+        return None
+    require_nonempty_string(version_id, field_name)
+    if store.get_agent_version(space_id=space_id, version_id=version_id) is None:
         raise ToolValidationError(
-            f"unknown artifact_type {artifact_type!r}; expected one of: {valid}"
+            f"`{field_name}` does not identify a version visible for this `space_id`."
+        )
+    return version_id
+
+
+def save_agent_config_version_core(
+    store: AgentVersionStore,
+    *,
+    space_id: str,
+    config: dict[str, Any],
+    reason: str,
+    change_summary: Optional[str] = None,
+    parent_version_id: Optional[str] = None,
+    rollback_target_version_id: Optional[str] = None,
+) -> dict:
+    """Validate and append one complete configuration snapshot."""
+    require_nonempty_string(space_id, "space_id")
+    valid_reason = validate_reason(reason)
+    valid_summary = validate_change_summary(change_summary)
+
+    if valid_reason == "before_rollback" and rollback_target_version_id is None:
+        raise ToolValidationError(
+            "`rollback_target_version_id` is required when reason is `before_rollback`."
+        )
+    if valid_reason != "before_rollback" and rollback_target_version_id is not None:
+        raise ToolValidationError(
+            "`rollback_target_version_id` is only valid when reason is `before_rollback`."
         )
 
-    # Derive a short summary for list_history when the caller didn't provide one.
-    effective_summary = summary
-    if effective_summary is None and content_md:
-        first_line = content_md.strip().splitlines()[0] if content_md.strip() else ""
-        effective_summary = first_line[:280] or None
-
-    result = store.save_report(
+    valid_parent = _require_existing_reference(
+        store,
         space_id=space_id,
-        artifact_type=artifact_type,
-        title=title,
-        content_md=content_md,
-        summary=effective_summary,
-        scores_findings=scores_findings,
-        run_id=run_id,
-        config_version_id=config_version_id,
-        skill_name=skill_name,
-        redacted=redacted,
-        idempotency_key=idempotency_key,
+        version_id=parent_version_id,
+        field_name="parent_version_id",
     )
-    result["ok"] = True
-    return result
+    valid_rollback_target = _require_existing_reference(
+        store,
+        space_id=space_id,
+        version_id=rollback_target_version_id,
+        field_name="rollback_target_version_id",
+    )
+    prepared = prepare_envelope(
+        space_id=space_id,
+        config=config,
+        max_config_bytes=store.settings.max_config_bytes,
+    )
+    saved = store.save_agent_config_version(
+        space_id=space_id,
+        reason=valid_reason,
+        config_envelope=prepared.envelope_json,
+        config_hash=prepared.config_hash,
+        change_summary=valid_summary,
+        parent_version_id=valid_parent,
+        rollback_target_version_id=valid_rollback_target,
+    )
+    return {
+        "ok": True,
+        "version_id": saved["version_id"],
+        "created_at": saved["created_at"],
+        "created_by": saved["created_by"],
+        "config_hash": saved["config_hash"],
+    }
 
 
-def record_optimization_run_core(
-    store: UCTableStore,
+def list_agent_versions_core(
+    store: AgentVersionStore,
     *,
     space_id: str,
-    run_id: str,
-    eval_results: Optional[Sequence[Any]] = None,
-    baseline_score: Optional[float] = None,
-    candidate_score: Optional[float] = None,
-    score_delta: Optional[float] = None,
-    fixed_count: Optional[int] = None,
-    regressed_count: Optional[int] = None,
-    unchanged_count: Optional[int] = None,
-    excluded_count: Optional[int] = None,
-    decision: Optional[str] = None,
-    parent_config_version_id: Optional[str] = None,
-    result_config_version_id: Optional[str] = None,
-    change_summary: Optional[str] = None,
-    idempotency_key: Optional[str] = None,
+    limit: int = DEFAULT_LIST_LIMIT,
+    cursor: Optional[str] = None,
 ) -> dict:
-    _require(space_id, "space_id")
-    _require(run_id, "run_id")
-    cleaned_evals = _validate_eval_results(eval_results)
-
-    # Convenience: derive score_delta when the caller omits it but both endpoints exist,
-    # so the stored row is internally consistent (spec §7.1 score_delta column).
-    effective_delta = score_delta
-    if effective_delta is None and baseline_score is not None and candidate_score is not None:
-        effective_delta = candidate_score - baseline_score
-
-    result = store.record_optimization_run(
+    require_nonempty_string(space_id, "space_id")
+    valid_limit = validate_limit(limit)
+    decoded_cursor = decode_cursor(cursor, expected_space_id=space_id) if cursor else None
+    rows = store.list_agent_versions(
         space_id=space_id,
-        run_id=run_id,
-        eval_results=cleaned_evals,
-        baseline_score=baseline_score,
-        candidate_score=candidate_score,
-        score_delta=effective_delta,
-        fixed_count=fixed_count,
-        regressed_count=regressed_count,
-        unchanged_count=unchanged_count,
-        excluded_count=excluded_count,
-        decision=decision,
-        parent_config_version_id=parent_config_version_id,
-        result_config_version_id=result_config_version_id,
-        change_summary=change_summary,
-        idempotency_key=idempotency_key,
+        limit=valid_limit,
+        cursor=decoded_cursor,
     )
-    result["ok"] = True
-    return result
-
-
-def list_history_core(
-    store: UCTableStore,
-    *,
-    space_id: str,
-    artifact_type: Optional[str] = None,
-    limit: int = 50,
-    since: Optional[str] = None,
-) -> dict:
-    _require(space_id, "space_id")
-    if artifact_type is not None and artifact_type not in store.known_type_labels():
-        valid = ", ".join(sorted(store.known_type_labels()))
-        raise ToolValidationError(
-            f"unknown artifact_type {artifact_type!r}; expected one of: {valid}"
+    has_more = len(rows) > valid_limit
+    items = rows[:valid_limit]
+    next_cursor = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_cursor(
+            space_id=space_id,
+            created_at=str(last["created_at"]),
+            version_id=str(last["version_id"]),
         )
-    items = store.list_history(
-        space_id=space_id,
-        type_label=artifact_type,
-        limit=limit,
-        since=since,
-    )
-    return {"ok": True, "items": items, "count": len(items)}
+    return {
+        "ok": True,
+        "items": items,
+        "next_cursor": next_cursor,
+    }
 
 
-def get_artifact_core(store: UCTableStore, *, id: str) -> dict:
-    _require(id, "id")
-    found = store.get_artifact(id)
-    if found is None:
-        return {"ok": False, "error_type": "not_found", "message": f"no artifact with id {id!r}"}
-    found["ok"] = True
-    return found
-
-
-# ---------------------------------------------------------------------------
-# OBO identity + structured error wrapping
-# ---------------------------------------------------------------------------
-def _build_user_store(settings: Settings) -> UCTableStore:
-    """Build an OBO-backed store for the calling user.
-
-    Raises :class:`OBOScopeError` when the token is absent / OBO is disabled. A
-    token/identity-auth failure from ``current_user.me()`` (e.g. SDK ``Unauthenticated``)
-    is also re-raised as :class:`OBOScopeError` so it surfaces as a ``scope_error``
-    rather than a generic internal error (a deployed app's OBO token can default to
-    identity-only scopes — spec §5, P0 finding F-6).
-    """
-    w = auth.get_user_workspace_client(obo_enabled=settings.obo_enabled)
+def get_agent_version_core(
+    store: AgentVersionStore,
+    *,
+    space_id: str,
+    version_id: str,
+) -> dict:
+    require_nonempty_string(space_id, "space_id")
+    require_nonempty_string(version_id, "version_id")
+    row = store.get_agent_version(space_id=space_id, version_id=version_id)
+    if row is None:
+        return {
+            "ok": False,
+            "error_type": "not_found",
+            "message": "no version is visible with that `space_id` and `version_id`",
+        }
     try:
-        me = w.current_user.me()
-    except OBOScopeError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        if looks_like_scope_error(exc):
-            raise OBOScopeError(f"OBO identity resolution failed: {exc}") from exc
-        raise
-    user_name = me.user_name or "unknown"
-    return UCTableStore(make_sql_exec(w, settings.sql_warehouse_id), settings, user_name=user_name)
+        config = json.loads(row["config_envelope"])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("stored configuration envelope is invalid JSON") from exc
+    historical_etag = config.get("etag")
+    return {
+        "ok": True,
+        "version_id": row["version_id"],
+        "space_id": row["space_id"],
+        "reason": row["reason"],
+        "config": config,
+        "config_hash": row["config_hash"],
+        "change_summary": row.get("change_summary"),
+        "parent_version_id": row.get("parent_version_id"),
+        "rollback_target_version_id": row.get("rollback_target_version_id"),
+        "created_at": row["created_at"],
+        "created_by": row["created_by"],
+        "etag_provenance": {
+            "value": historical_etag,
+            "is_historical": True,
+            "valid_for_update_lock": False,
+            "instruction": "Read a fresh live etag before applying this configuration.",
+        },
+    }
 
 
-def _run_tool(settings: Settings, tool_name: str, core: Callable[[UCTableStore], dict]) -> dict:
-    """Resolve OBO identity, run ``core(store)``, and map errors to structured payloads.
+def _build_user_store(settings: Settings) -> AgentVersionStore:
+    """Build an OBO SQL store without making a separate identity API call."""
+    workspace = auth.get_user_workspace_client(obo_enabled=settings.obo_enabled)
+    return AgentVersionStore(make_sql_exec(workspace, settings.sql_warehouse_id), settings)
 
-    Emits one structured log line per call (tool + outcome) for observability (spec §10).
-    """
+
+def _run_tool(
+    settings: Settings,
+    tool_name: str,
+    core: Callable[[AgentVersionStore], dict],
+) -> dict:
     try:
-        store = _build_user_store(settings)
-        result = core(store)
+        result = core(_build_user_store(settings))
         logger.info("tool=%s ok=%s", tool_name, result.get("ok", True))
         return result
     except OBOScopeError as exc:
@@ -313,8 +208,7 @@ def _run_tool(settings: Settings, tool_name: str, core: Callable[[UCTableStore],
             return scope_error_payload(str(exc))
         logger.error("tool=%s sql_error: %s", tool_name, exc)
         return error_payload("sql_error", str(exc))
-    except Exception as exc:  # noqa: BLE001 — surface anything else as a structured error
-        # Classify a token/OAuth failure as scope_error; everything else is internal.
+    except Exception as exc:  # noqa: BLE001
         if looks_like_scope_error(exc):
             logger.warning("tool=%s scope_error (auth): %s", tool_name, exc)
             return scope_error_payload(str(exc))
@@ -323,172 +217,75 @@ def _run_tool(settings: Settings, tool_name: str, core: Callable[[UCTableStore],
 
 
 def register_tools(mcp_server, settings: Settings) -> None:
-    """Register the P1 write/read tools + the P2 ``record_optimization_run`` on the server."""
+    """Register exactly the three v2 configuration-version tools."""
 
     @mcp_server.tool
-    def save_config_snapshot(
+    def save_agent_config_version(
         space_id: str,
-        serialized_space: str,
-        etag: Optional[str] = None,
-        version_label: Optional[str] = None,
-        parent_config_version_id: Optional[str] = None,
-        run_id: Optional[str] = None,
-        changed_surfaces: Optional[list[str]] = None,
+        config: dict[str, Any],
+        reason: str,
         change_summary: Optional[str] = None,
-        rollback_reference: Optional[str] = None,
-        skill_name: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
+        parent_version_id: Optional[str] = None,
+        rollback_target_version_id: Optional[str] = None,
     ) -> dict:
-        """Persist a Genie Space config snapshot (the mandatory before/after snapshot).
+        """Save a complete Genie Agent configuration before any native edit.
 
-        The caller supplies ``serialized_space`` — the MCP never fetches it. The server
-        computes a sha256 ``config_hash``, stores the caller's ``etag`` verbatim, and sets
-        lineage via ``parent_config_version_id``. Snapshots are ordered/identified by
-        ``created_at`` + ``config_version_id`` (no monotonic version counter). Returns
-        ``{config_version_id, config_hash, etag}``. (Writes config_snapshots.)
+        Genie Code must call this tool with the complete current live configuration and
+        stop without editing if the result is not ``ok: true``. Use ``before_update``
+        before a normal edit and ``before_rollback`` before applying an older version.
+        Every successful call appends a distinct version, even for identical content.
         """
         return _run_tool(
             settings,
-            "save_config_snapshot",
-            lambda store: save_config_snapshot_core(
+            "save_agent_config_version",
+            lambda store: save_agent_config_version_core(
                 store,
                 space_id=space_id,
-                serialized_space=serialized_space,
-                etag=etag,
-                version_label=version_label,
-                parent_config_version_id=parent_config_version_id,
-                run_id=run_id,
-                changed_surfaces=changed_surfaces,
+                config=config,
+                reason=reason,
                 change_summary=change_summary,
-                rollback_reference=rollback_reference,
-                skill_name=skill_name,
-                idempotency_key=idempotency_key,
+                parent_version_id=parent_version_id,
+                rollback_target_version_id=rollback_target_version_id,
             ),
         )
 
     @mcp_server.tool
-    def save_report(
+    def list_agent_versions(
         space_id: str,
-        artifact_type: str,
-        title: str,
-        content_md: str,
-        run_id: Optional[str] = None,
-        scores_findings: Optional[str] = None,
-        summary: Optional[str] = None,
-        config_version_id: Optional[str] = None,
-        skill_name: Optional[str] = None,
-        redacted: bool = True,
-        redact: Optional[bool] = None,
-        idempotency_key: Optional[str] = None,
+        limit: int = DEFAULT_LIST_LIMIT,
+        cursor: Optional[str] = None,
     ) -> dict:
-        """Persist a Markdown artifact, routed by ``artifact_type`` to its table.
+        """List the calling user's stored versions for one Genie Agent.
 
-        ``diagnose_report`` → diagnose_reports, ``query_report`` → query_reports,
-        ``design_proposal`` → design_proposals, ``metric_view_ddl`` → metric_view_artifacts.
-        Unknown types are rejected. Returns ``{artifact_id}``.
-
-        Redaction defaults to true. The spec spells the flag ``redact`` (§6/§7.3); both
-        ``redact`` and ``redacted`` are accepted (``redact`` wins if both are sent).
-        """
-        effective_redacted = redact if redact is not None else redacted
-        return _run_tool(
-            settings,
-            "save_report",
-            lambda store: save_report_core(
-                store,
-                space_id=space_id,
-                artifact_type=artifact_type,
-                title=title,
-                content_md=content_md,
-                run_id=run_id,
-                scores_findings=scores_findings,
-                summary=summary,
-                config_version_id=config_version_id,
-                skill_name=skill_name,
-                redacted=effective_redacted,
-                idempotency_key=idempotency_key,
-            ),
-        )
-
-    @mcp_server.tool
-    def record_optimization_run(
-        space_id: str,
-        run_id: str,
-        eval_results: Optional[list[dict]] = None,
-        baseline_score: Optional[float] = None,
-        candidate_score: Optional[float] = None,
-        score_delta: Optional[float] = None,
-        fixed_count: Optional[int] = None,
-        regressed_count: Optional[int] = None,
-        unchanged_count: Optional[int] = None,
-        excluded_count: Optional[int] = None,
-        decision: Optional[str] = None,
-        parent_config_version_id: Optional[str] = None,
-        result_config_version_id: Optional[str] = None,
-        change_summary: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
-    ) -> dict:
-        """Persist a tuning run: one run summary + per-question eval results + decision.
-
-        Writes one row to ``optimization_runs`` and one row per ``eval_results`` entry to
-        ``eval_results`` (FK ``run_id``). The run is keyed by an id derived from
-        ``idempotency_key`` (default: ``run_id``), so a retry returns the existing run with
-        ``deduplicated=true`` and does not re-insert eval rows. ``score_delta`` is derived
-        from ``candidate_score - baseline_score`` when omitted and both are present.
-        Returns ``{run_id, eval_count, deduplicated}``. (Writes optimization_runs + eval_results.)
+        Use the opaque ``next_cursor`` for the next page. Before rolling back, retrieve
+        the selected version and then save the current live configuration with
+        ``save_agent_config_version(reason='before_rollback')``.
         """
         return _run_tool(
             settings,
-            "record_optimization_run",
-            lambda store: record_optimization_run_core(
+            "list_agent_versions",
+            lambda store: list_agent_versions_core(
                 store,
                 space_id=space_id,
-                run_id=run_id,
-                eval_results=eval_results,
-                baseline_score=baseline_score,
-                candidate_score=candidate_score,
-                score_delta=score_delta,
-                fixed_count=fixed_count,
-                regressed_count=regressed_count,
-                unchanged_count=unchanged_count,
-                excluded_count=excluded_count,
-                decision=decision,
-                parent_config_version_id=parent_config_version_id,
-                result_config_version_id=result_config_version_id,
-                change_summary=change_summary,
-                idempotency_key=idempotency_key,
-            ),
-        )
-
-    @mcp_server.tool
-    def list_history(
-        space_id: str,
-        artifact_type: Optional[str] = None,
-        limit: int = 50,
-        since: Optional[str] = None,
-    ) -> dict:
-        """Timeline of versions/runs/reports for a Space (UNION across all artifact tables).
-
-        Returns ``{items: [{id, type, version, created_at, created_by, summary, decision}]}``.
-        ``artifact_type`` optionally restricts to one type; ``since`` filters on created_at.
-        """
-        return _run_tool(
-            settings,
-            "list_history",
-            lambda store: list_history_core(
-                store,
-                space_id=space_id,
-                artifact_type=artifact_type,
                 limit=limit,
-                since=since,
+                cursor=cursor,
             ),
         )
 
     @mcp_server.tool
-    def get_artifact(id: str) -> dict:
-        """Fetch one stored item by id (config_version_id / artifact_id / run_id).
+    def get_agent_version(space_id: str, version_id: str) -> dict:
+        """Retrieve one complete version scoped to its Genie Agent.
 
-        Resolves the id across all artifact tables and returns the full record
-        (including ``config_json`` / ``content_md``).
+        The returned etag is historical provenance only. Before applying this version,
+        read the current live Agent and use its fresh etag as the update lock. Save that
+        current state first and stop without rollback if the save fails.
         """
-        return _run_tool(settings, "get_artifact", lambda store: get_artifact_core(store, id=id))
+        return _run_tool(
+            settings,
+            "get_agent_version",
+            lambda store: get_agent_version_core(
+                store,
+                space_id=space_id,
+                version_id=version_id,
+            ),
+        )

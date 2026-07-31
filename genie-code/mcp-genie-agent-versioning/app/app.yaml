@@ -1,34 +1,34 @@
-# Databricks Apps manifest for the Genie Agent Versioning MCP server (spec §10).
-# App name must start with "mcp-" for AI Playground / Genie Code recognition.
-#
-# Deploy root is this `app/` directory: uvicorn resolves `server.app:app` against
-# it (the `server` package is on sys.path), and Apps installs `requirements.txt`.
+# Databricks Apps manifest for the v2 Genie Agent Versioning MCP.
 command:
-  - "sh"
-  - "-c"
-  - "uvicorn server.app:app --host 0.0.0.0 --port ${DATABRICKS_APP_PORT:-8000}"
+  - "python"
+  - "-m"
+  - "server.main"
 
-# OBO OAuth scopes (spec §5 / §12 #2, P0 finding F-6). A deployed app's OBO token
-# otherwise defaults to identity-only scopes and warehouse calls fail. This server
-# needs ONLY `sql` (it never calls the Genie API under Option A).
+# User tool calls need only SQL. The app never calls the Genie API.
 user_api_scopes:
   - sql
 
 env:
   - name: HISTORY_CATALOG
-    value: "<pre-existing-catalog>"   # the app NEVER creates this; schema genie_space_history is auto-created inside it
-  - name: HISTORY_OWNER_GROUP
-    value: "<account-group>"          # durable OWNER of schema/tables (survives app/SP deletion)
+    value: "<pre-existing-catalog>"
+  - name: HISTORY_SCHEMA
+    value: "genie_agent_versioning"
   - name: HISTORY_GRANTEE
-    value: "<user-group>"             # OBO users granted SELECT/MODIFY at bootstrap
-  - name: SQL_WAREHOUSE_ID
-    valueFrom: "sql-warehouse"        # bind a SQL-warehouse app resource (CAN USE)
-  - name: CORS_ALLOW_ORIGINS
-    value: "https://<workspace-host>"  # allow-list the workspace URL (spec §3)
-  # JSON columns default to STRING; flip to true ONLY after confirming VARIANT on the
-  # target warehouse (spec §7.1 / §12 #3). Never hard-required.
-  - name: HISTORY_USE_VARIANT
+    value: "<account-group>"
+  # Set true only after a catalog owner has granted USE CATALOG to HISTORY_GRANTEE.
+  - name: HISTORY_GRANTEE_USE_CATALOG_CONFIRMED
     value: "false"
-  # OBO feature flag for graceful degradation where OBO isn't enabled yet (spec §5).
+  - name: SQL_WAREHOUSE_ID
+    valueFrom: "sql-warehouse"
+  - name: CORS_ALLOW_ORIGINS
+    value: "https://<workspace-host>"
   - name: OBO_ENABLED
     value: "true"
+  - name: MAX_CONFIG_BYTES
+    value: "5242880"
+  # Leave ownership with the app SP for a test deployment so bootstrap remains
+  # rerunnable. Production operators can opt into a one-time group handoff.
+  - name: TRANSFER_OWNERSHIP
+    value: "false"
+  - name: HISTORY_OWNER_GROUP
+    value: ""

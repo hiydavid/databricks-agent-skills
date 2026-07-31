@@ -1,18 +1,4 @@
-"""Env-driven configuration (spec §10).
-
-All deployment knobs come from environment variables set in ``app.yaml``:
-
-  * ``HISTORY_CATALOG``     — a **pre-existing** UC catalog. The app NEVER creates it.
-  * ``HISTORY_OWNER_GROUP`` — durable account group that OWNS the schema/tables
-                              (survives app/SP deletion — spec §7.1).
-  * ``HISTORY_GRANTEE``     — user group granted SELECT/MODIFY for OBO reads/writes.
-  * ``SQL_WAREHOUSE_ID``    — warehouse all UC SQL runs on.
-  * ``CORS_ALLOW_ORIGINS``  — comma-separated workspace origin allowlist (spec §3).
-  * ``HISTORY_USE_VARIANT`` — opt-in VARIANT JSON columns (default STRING — spec §7.1/§12 #3).
-  * ``OBO_ENABLED``         — OBO feature flag for graceful degradation (spec §5/§12 #2).
-
-The schema name is fixed at ``genie_space_history`` (spec §7.1).
-"""
+"""Environment-driven settings for the v2 configuration version store."""
 
 from __future__ import annotations
 
@@ -20,8 +6,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Mapping, Optional
 
-# Fixed by the design spec §7.1 — never configurable.
-HISTORY_SCHEMA = "genie_space_history"
+DEFAULT_HISTORY_SCHEMA = "genie_agent_versioning"
+DEFAULT_MAX_CONFIG_BYTES = 5 * 1024 * 1024
 
 
 def _as_bool(value: Optional[str], *, default: bool) -> bool:
@@ -30,60 +16,90 @@ def _as_bool(value: Optional[str], *, default: bool) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _as_positive_int(value: Optional[str], *, default: int) -> int:
+    if value is None or not value.strip():
+        return default
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError("MAX_CONFIG_BYTES must be a positive integer")
+    return parsed
+
+
 @dataclass(frozen=True)
 class Settings:
-    """Resolved, immutable server configuration."""
+    """Resolved, immutable server configuration.
+
+    ``HISTORY_SCHEMA`` is deliberately configurable. Fresh deployments default to
+    ``genie_agent_versioning``; an existing v1 deployment can explicitly keep using
+    ``genie_space_history`` while the v2 table is added alongside its legacy tables.
+    """
 
     history_catalog: str
-    history_owner_group: str
     history_grantee: str
     sql_warehouse_id: str
-    history_schema: str = HISTORY_SCHEMA
+    history_schema: str = DEFAULT_HISTORY_SCHEMA
+    history_owner_group: str = ""
+    transfer_ownership: bool = False
+    grantee_use_catalog_confirmed: bool = False
     cors_allow_origins: tuple[str, ...] = field(default_factory=tuple)
-    use_variant: bool = False
     obo_enabled: bool = True
+    max_config_bytes: int = DEFAULT_MAX_CONFIG_BYTES
 
     @property
     def fq_schema(self) -> str:
-        """``catalog.schema`` for logging/display (NOT pre-quoted)."""
         return f"{self.history_catalog}.{self.history_schema}"
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "Settings":
-        """Build settings from the process environment (or an injected mapping for tests)."""
         env = env if env is not None else os.environ
         origins = tuple(
-            o.strip() for o in env.get("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()
+            origin.strip()
+            for origin in env.get("CORS_ALLOW_ORIGINS", "").split(",")
+            if origin.strip()
         )
         return cls(
             history_catalog=env.get("HISTORY_CATALOG", "").strip(),
+            history_schema=(
+                env.get("HISTORY_SCHEMA", DEFAULT_HISTORY_SCHEMA).strip() or DEFAULT_HISTORY_SCHEMA
+            ),
             history_owner_group=env.get("HISTORY_OWNER_GROUP", "").strip(),
             history_grantee=env.get("HISTORY_GRANTEE", "").strip(),
             sql_warehouse_id=env.get("SQL_WAREHOUSE_ID", "").strip(),
+            transfer_ownership=_as_bool(env.get("TRANSFER_OWNERSHIP"), default=False),
+            grantee_use_catalog_confirmed=_as_bool(
+                env.get("HISTORY_GRANTEE_USE_CATALOG_CONFIRMED"), default=False
+            ),
             cors_allow_origins=origins,
-            use_variant=_as_bool(env.get("HISTORY_USE_VARIANT"), default=False),
             obo_enabled=_as_bool(env.get("OBO_ENABLED"), default=True),
+            max_config_bytes=_as_positive_int(
+                env.get("MAX_CONFIG_BYTES"), default=DEFAULT_MAX_CONFIG_BYTES
+            ),
         )
 
     def missing_required(self) -> list[str]:
-        """Names of required env vars that are unset (for a fail-fast startup check)."""
         required = {
             "HISTORY_CATALOG": self.history_catalog,
-            "HISTORY_OWNER_GROUP": self.history_owner_group,
+            "HISTORY_SCHEMA": self.history_schema,
             "HISTORY_GRANTEE": self.history_grantee,
             "SQL_WAREHOUSE_ID": self.sql_warehouse_id,
         }
-        return [name for name, value in required.items() if not value]
+        missing = [name for name, value in required.items() if not value]
+        if self.transfer_ownership and not self.history_owner_group:
+            missing.append("HISTORY_OWNER_GROUP (required when TRANSFER_OWNERSHIP=true)")
+        if not self.grantee_use_catalog_confirmed:
+            missing.append("HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true")
+        return missing
 
     def as_public_dict(self) -> dict[str, object]:
-        """Non-secret config echo for ``/healthz`` / structured logs."""
         return {
             "history_catalog": self.history_catalog,
             "history_schema": self.history_schema,
             "history_owner_group": self.history_owner_group,
             "history_grantee": self.history_grantee,
             "sql_warehouse_id": self.sql_warehouse_id,
+            "transfer_ownership": self.transfer_ownership,
+            "grantee_use_catalog_confirmed": self.grantee_use_catalog_confirmed,
             "cors_allow_origins": list(self.cors_allow_origins),
-            "use_variant": self.use_variant,
             "obo_enabled": self.obo_enabled,
+            "max_config_bytes": self.max_config_bytes,
         }

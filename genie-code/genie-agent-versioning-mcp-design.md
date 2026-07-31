@@ -1,6 +1,6 @@
 # Genie Agent Versioning MCP — Design Spec
 
-**Status:** Proposed v2; the current server is a v1 implementation and does not yet satisfy this contract
+**Status:** Implemented in server v2
 **Audience:** Engineers building the MCP server and users configuring native Genie Code
 **Last updated:** 2026-07-30
 
@@ -127,6 +127,9 @@ Inputs:
 - `reason` — `before_update`, `before_rollback`, or `manual`
 - `change_summary?` — brief, single-line summary of the intended change (maximum 200
   characters)
+- `parent_version_id?` — optional same-Agent lineage reference
+- `rollback_target_version_id?` — required for `before_rollback`; identifies the
+  same-Agent version that will be applied
 
 Returns:
 
@@ -179,18 +182,20 @@ A version stores a complete, validated, restorable envelope—not only
 }
 ```
 
-The exact outer fields must be verified against the current native Genie Code read/update
-contract before implementation. Newly introduced restorable fields must be preserved in
-a forward-compatible envelope rather than silently dropped.
+The v2 input requires `serialized_space`, `title`, `description`, `warehouse_id`, and
+`parent_path` to be present. `description` and `parent_path` may be null; `etag` is
+optional. Newly introduced JSON-safe restorable fields are preserved in the envelope
+rather than silently dropped.
 
 Validation rules:
 
 - `serialized_space` must parse as JSON and satisfy known structural constraints.
 - Unknown envelope fields are preserved when safe.
-- Payload size is bounded.
+- Payload size is bounded to 5 MiB by default and is operator-configurable.
 - `change_summary`, when provided, must be a single line of at most 200 characters.
-- Hashing uses a canonical representation of the restorable configuration fields and
-  excludes the historical `etag`.
+- Hashing uses sorted compact JSON, parses `serialized_space` before hashing so formatting
+  is insignificant, includes preserved restorable fields, and excludes historical `etag`,
+  `space_id`, `format_version`, and event metadata.
 - `reason` must be one of the three documented values.
 
 Because the MCP does not read the Agent, it validates shape but cannot prove
@@ -209,6 +214,8 @@ CREATE TABLE agent_config_versions (
   config_envelope     STRING    NOT NULL,
   config_hash         STRING    NOT NULL,
   change_summary      STRING,
+  parent_version_id   STRING,
+  rollback_target_version_id STRING,
   created_at          TIMESTAMP NOT NULL,
   created_by          STRING    NOT NULL
 ) USING DELTA;
@@ -264,11 +271,12 @@ configuration versioning.
 
 Migration steps:
 
-1. Add `agent_config_versions` with an explicit schema version/migration mechanism.
+1. Add `agent_config_versions` plus an admin-only `schema_migrations` ledger.
 2. Implement the three v2 tools and the simplified save contract.
 3. Keep OBO SQL and per-user row isolation.
-4. Import valid v1 snapshots only when a complete restorable envelope can be constructed;
-   otherwise preserve them as legacy partial records, not rollback targets.
+4. Preserve v1 snapshots as legacy partial records. The shipped v1 schema did not retain
+   every required outer restore field, so the server does not automatically promote them
+   to rollback-ready versions.
 5. Retire report/evaluation tools from the core service while preserving existing data.
 
 Existing deployments may retain the `genie_space_history` schema during migration. New
