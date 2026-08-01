@@ -210,7 +210,8 @@ https://<app-url>/mcp
 
 Genie Code calls the MCP from the workspace UI, so the browser first sends an
 `OPTIONS /mcp` CORS preflight. The App automatically allows the workspace origin supplied
-by the Databricks Apps runtime in `DATABRICKS_HOST`; no CORS setting is required.
+by the Databricks Apps runtime in `DATABRICKS_HOST` and workspace aliases on official
+Databricks domains; no CORS setting is required.
 
 Add this user or workspace instruction:
 

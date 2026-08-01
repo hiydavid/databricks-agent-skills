@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -69,6 +70,31 @@ def test_mcp_cors_preflight_allows_configured_workspace_origin(settings: Setting
     assert response.headers["access-control-allow-origin"] == origin
 
 
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://workspace-alias.cloud.databricks.com",
+        "https://adb-1234567890123456.7.azuredatabricks.net",
+        "https://1234567890123456.7.gcp.databricks.com",
+    ],
+)
+def test_mcp_cors_preflight_allows_official_workspace_alias(settings: Settings, origin: str):
+    cors_app = FastAPI()
+    app_module._add_cors_middleware(cors_app, settings)
+
+    response = TestClient(cors_app).options(
+        "/mcp",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,mcp-protocol-version",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
 def test_mcp_cors_preflight_rejects_unconfigured_origin(settings: Settings):
     cors_app = FastAPI()
     app_module._add_cors_middleware(cors_app, settings)
@@ -76,7 +102,7 @@ def test_mcp_cors_preflight_rejects_unconfigured_origin(settings: Settings):
     response = TestClient(cors_app).options(
         "/mcp",
         headers={
-            "Origin": "https://attacker.example",
+            "Origin": "https://cloud.databricks.com.attacker.example",
             "Access-Control-Request-Method": "POST",
         },
     )
