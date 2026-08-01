@@ -200,20 +200,37 @@ are a missing catalog/schema privilege, an incorrectly named grantee principal, 
 failure, or a SQL warehouse resource that is stopped or not bound with key
 `sql-warehouse`.
 
-### 7. Connect Genie Code and run a smoke test
+### 7. Connect Genie Code
 
-Add a custom MCP server in Genie Code using:
+Connect the deployed App through the Genie Code UI:
 
-```text
-https://<app-url>/mcp
-```
+1. Open **Genie Code settings**.
+2. Under **MCP Servers**, click **Add Server**.
+3. Select **Custom MCP server**, then select the deployed Databricks App.
+4. Click **Save**.
+
+The App exposes the endpoint Genie Code requires at `https://<app-url>/mcp`; users select
+the App in the UI rather than entering this URL manually. See the
+[Genie Code MCP documentation](https://docs.databricks.com/aws/en/genie-code/mcp).
 
 Genie Code calls the MCP from the workspace UI, so the browser first sends an
 `OPTIONS /mcp` CORS preflight. The App automatically allows the workspace origin supplied
 by the Databricks Apps runtime in `DATABRICKS_HOST` and workspace aliases on official
 Databricks domains; no CORS setting is required.
 
-Add this user or workspace instruction:
+The MCP exposes versioning tools, but it cannot intercept native Genie Agent edits. Add a
+persistent custom instruction so Genie Code applies the snapshot requirement throughout
+long, multi-step tasks:
+
+- **User instruction:** Best for a personal deployment. In full-page Genie Code, open
+  **Customization** > **Instructions**. Under **User instructions**, select **Add
+  instructions file** and edit the generated
+  `/Users/<your-username-or-email>/.assistant_instructions.md` file.
+- **Workspace instruction:** Best when every Genie Code user must follow the policy. A
+  workspace administrator must add the instruction to
+  `/Workspace/.assistant_workspace_instructions.md`.
+
+Add the following text to either instruction file:
 
 > Before changing any Genie Agent configuration, first read its complete current
 > configuration and save it with `save_agent_config_version` using reason
@@ -222,16 +239,11 @@ Add this user or workspace instruction:
 > or the save fails, stop without editing. For rollback, use a freshly read live etag,
 > never the stored historical etag. Follow this rule even with Auto-Approve enabled.
 
-Smoke-test in this order:
-
-1. Ask Genie Code to list versions for a test Agent.
-2. Ask it to make a harmless configuration edit and confirm a `before_update` version was
-   saved first.
-3. Save the same live configuration manually twice and confirm two version IDs with the
-   same hash.
-4. Ask for a rollback; confirm Genie Code saves the current state with
-   `before_rollback`, retrieves the target, reads a fresh live etag, and then applies it.
-5. Temporarily disconnect the MCP and verify Genie Code stops before a requested edit.
+For extra visibility, task prompts can also include: “Follow the Genie Agent versioning
+instruction before every configuration edit.” Putting the full requirement only in an
+individual task prompt works for one-off use, but a persistent user or workspace
+instruction is more reliable across long sessions. See the
+[Genie Code custom instructions documentation](https://docs.databricks.com/aws/en/genie-code/instructions).
 
 ## Configuration
 
