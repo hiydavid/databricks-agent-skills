@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, Optional
+from typing import Annotated, Any, Callable, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import auth
 from .config import Settings
@@ -30,6 +32,28 @@ from .sql import SqlError, make_sql_exec
 from .store import AgentVersionStore
 
 logger = logging.getLogger("mcp-genie-agent-versioning.tools")
+
+
+class AgentConfigInput(BaseModel):
+    """Complete restore fields from a live Get Genie Agent response."""
+
+    model_config = ConfigDict(extra="allow")
+
+    serialized_space: str = Field(
+        description=(
+            "Exact string returned by Get Genie Agent with "
+            "`include_serialized_space=true`; never substitute a summary, status, or "
+            "evaluation report."
+        )
+    )
+    title: str
+    description: Optional[str]
+    warehouse_id: str
+    parent_path: Optional[str]
+    etag: Optional[str] = Field(
+        default=None,
+        description="Optional etag captured with the live configuration for provenance.",
+    )
 
 
 def _require_existing_reference(
@@ -222,7 +246,15 @@ def register_tools(mcp_server, settings: Settings) -> None:
     @mcp_server.tool
     def save_agent_config_version(
         space_id: str,
-        config: dict[str, Any],
+        config: Annotated[
+            AgentConfigInput,
+            Field(
+                description=(
+                    "Complete current live Genie Agent response, including the exact "
+                    "serialized configuration."
+                )
+            ),
+        ],
         reason: str,
         change_summary: Optional[str] = None,
         parent_version_id: Optional[str] = None,
@@ -230,10 +262,12 @@ def register_tools(mcp_server, settings: Settings) -> None:
     ) -> dict:
         """Save a complete Genie Agent configuration before any native edit.
 
-        Genie Code must call this tool with the complete current live configuration and
-        stop without editing if the result is not ``ok: true``. Use ``before_update``
-        before a normal edit and ``before_rollback`` before applying an older version.
-        Every successful call appends a distinct version, even for identical content.
+        First retrieve the Agent with ``include_serialized_space=true``. Pass the exact
+        returned ``serialized_space`` string, never a summary, status, or evaluation
+        report. Genie Code must stop without editing if the result is not ``ok: true``.
+        Use ``before_update`` before a normal edit and ``before_rollback`` before applying
+        an older version. Every successful call appends a distinct version, even for
+        identical content.
         """
         return _run_tool(
             settings,
@@ -241,7 +275,7 @@ def register_tools(mcp_server, settings: Settings) -> None:
             lambda store: save_agent_config_version_core(
                 store,
                 space_id=space_id,
-                config=config,
+                config=config.model_dump(mode="json", exclude_unset=True),
                 reason=reason,
                 change_summary=change_summary,
                 parent_version_id=parent_version_id,

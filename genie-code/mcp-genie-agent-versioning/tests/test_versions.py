@@ -59,6 +59,25 @@ def test_stored_envelope_is_complete(store, backend, complete_config):
     assert envelope["serialized_space"] == complete_config["serialized_space"]
 
 
+def test_progress_summary_is_rejected_before_table_write(store, backend, complete_config):
+    config = {
+        **complete_config,
+        "serialized_space": (
+            '{"state":"after_second_update","pass_rate":"30/39","failed":8,"needs_review":1}'
+        ),
+    }
+
+    with pytest.raises(ToolValidationError, match="not a complete Genie Agent export"):
+        save_agent_config_version_core(
+            store,
+            space_id="space-1",
+            config=config,
+            reason="before_update",
+        )
+
+    assert backend.inserts_into(schema.AGENT_CONFIG_VERSIONS) == []
+
+
 @pytest.mark.parametrize("reason", ["before_update", "before_rollback", "manual"])
 def test_documented_reasons_are_accepted(store, complete_config, reason):
     kwargs = {}

@@ -117,7 +117,11 @@ def store(backend: InMemoryBackend, settings: Settings) -> AgentVersionStore:
 @pytest.fixture
 def complete_config() -> dict:
     return {
-        "serialized_space": '{"data_sources":{"tables":[]},"instructions":"baseline"}',
+        "serialized_space": (
+            '{"version":2,"config":{"sample_questions":[]},'
+            '"data_sources":{"tables":[]},'
+            '"instructions":{"text_instructions":[]}}'
+        ),
         "title": "Revenue analyst",
         "description": "Answers revenue questions",
         "warehouse_id": "warehouse-1",

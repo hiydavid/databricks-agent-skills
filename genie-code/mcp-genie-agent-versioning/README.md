@@ -30,6 +30,11 @@ The contract and responsibility boundary are documented in
 }
 ```
 
+Retrieve this object with Get Genie Agent using `include_serialized_space=true` and pass
+the returned `serialized_space` string exactly. A summary, benchmark result, pass rate, or
+other progress metadata is not a restorable snapshot and is rejected. The parsed string
+must contain the exported Genie fields `version`, `config`, and `data_sources`.
+
 The five outer restore fields must be present even when a nullable value is `null`.
 Additional JSON-safe configuration fields are preserved. The server adds `format_version`
 and `space_id`, bounds the envelope to 5 MiB by default, and hashes canonical restore
@@ -233,7 +238,8 @@ long, multi-step tasks:
 Add the following text to either instruction file:
 
 > Before changing any Genie Agent configuration, first read its complete current
-> configuration and save it with `save_agent_config_version` using reason
+> configuration using Get Genie Agent with `include_serialized_space=true`, and save the
+> exact returned configuration with `save_agent_config_version` using reason
 > `before_update` or `before_rollback`. Proceed only if the save succeeds. Use
 > `list_agent_versions` and `get_agent_version` for rollback. If the MCP is unavailable
 > or the save fails, stop without editing. For rollback, use a freshly read live etag,

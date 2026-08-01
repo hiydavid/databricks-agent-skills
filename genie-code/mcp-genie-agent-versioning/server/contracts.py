@@ -16,6 +16,11 @@ DEFAULT_LIST_LIMIT = 50
 MAX_LIST_LIMIT = 100
 MAX_CHANGE_SUMMARY_CHARS = 200
 
+# These fields are present in the serialized representation returned by the Genie Get
+# Space API. Checking only for an arbitrary JSON object lets callers accidentally persist
+# progress notes or benchmark summaries that cannot be used to restore a space.
+REQUIRED_SERIALIZED_SPACE_FIELDS = ("version", "config", "data_sources")
+
 # Presence is required even when the native value is null. This prevents a caller from
 # accidentally saving a partial API projection and later treating it as rollback-ready.
 REQUIRED_CONFIG_FIELDS = (
@@ -103,6 +108,41 @@ def _canonical_json(value: Any) -> str:
         raise ToolValidationError("`config` must contain only valid JSON values.") from exc
 
 
+def _validate_serialized_space(value: Any) -> dict[str, Any]:
+    serialized_space = require_nonempty_string(value, "config.serialized_space")
+    try:
+        parsed = json.loads(serialized_space)
+    except json.JSONDecodeError as exc:
+        raise ToolValidationError("`config.serialized_space` must contain valid JSON.") from exc
+    if not isinstance(parsed, dict):
+        raise ToolValidationError("`config.serialized_space` JSON must be an object.")
+
+    missing = [name for name in REQUIRED_SERIALIZED_SPACE_FIELDS if name not in parsed]
+    if missing:
+        raise ToolValidationError(
+            "`config.serialized_space` is not a complete Genie Agent export; missing "
+            "required top-level field(s): "
+            + ", ".join(missing)
+            + ". Pass the exact value returned by Get Genie Agent with "
+            "`include_serialized_space=true`, not a summary or progress report."
+        )
+
+    version = parsed["version"]
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise ToolValidationError("`config.serialized_space.version` must be a positive integer.")
+    for field in ("config", "data_sources"):
+        if not isinstance(parsed[field], dict):
+            raise ToolValidationError(f"`config.serialized_space.{field}` must be a JSON object.")
+
+    data_sources = parsed["data_sources"]
+    for collection in ("tables", "metric_views"):
+        if collection in data_sources and not isinstance(data_sources[collection], list):
+            raise ToolValidationError(
+                f"`config.serialized_space.data_sources.{collection}` must be a JSON array."
+            )
+    return parsed
+
+
 def prepare_envelope(
     *, space_id: str, config: Mapping[str, Any], max_config_bytes: int
 ) -> PreparedEnvelope:
@@ -135,15 +175,7 @@ def prepare_envelope(
             f"unsupported `config.format_version`; expected {FORMAT_VERSION}."
         )
 
-    serialized_space = require_nonempty_string(
-        config.get("serialized_space"), "config.serialized_space"
-    )
-    try:
-        parsed_serialized_space = json.loads(serialized_space)
-    except json.JSONDecodeError as exc:
-        raise ToolValidationError("`config.serialized_space` must contain valid JSON.") from exc
-    if not isinstance(parsed_serialized_space, dict):
-        raise ToolValidationError("`config.serialized_space` JSON must be an object.")
+    parsed_serialized_space = _validate_serialized_space(config.get("serialized_space"))
 
     require_nonempty_string(config.get("title"), "config.title")
     require_nonempty_string(config.get("warehouse_id"), "config.warehouse_id")

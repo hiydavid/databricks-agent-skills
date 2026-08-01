@@ -32,6 +32,18 @@ def test_save_schema_and_blocking_instruction(settings):
     save = _registered_tools(server)["save_agent_config_version"]
     assert save.parameters["required"] == ["space_id", "config", "reason"]
     assert "stop without editing" in save.description
+    assert "include_serialized_space=true" in save.description
+    config_property = save.parameters["properties"]["config"]
+    assert "exact serialized configuration" in config_property["description"]
+    config_schema = save.parameters["$defs"]["AgentConfigInput"]
+    assert config_schema["required"] == [
+        "serialized_space",
+        "title",
+        "description",
+        "warehouse_id",
+        "parent_path",
+    ]
+    assert "Exact string returned" in config_schema["properties"]["serialized_space"]["description"]
 
 
 def test_get_description_warns_about_historical_etag(settings):

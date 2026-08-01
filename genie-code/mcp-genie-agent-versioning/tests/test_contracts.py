@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 
@@ -36,6 +37,66 @@ def test_serialized_space_must_be_json_object(complete_config):
         prepare_envelope(space_id="space-1", config=config, max_config_bytes=1_000_000)
 
 
+@pytest.mark.parametrize(
+    "serialized_space",
+    [
+        '{"state":"after_second_update","pass_rate":"30/39","failed":8}',
+        '{"state":"after_fourth_update","pass_rate":"31/39","failed":8}',
+        '{"state":"after_third_update","pass_rate":"30/39","failed":6}',
+    ],
+)
+def test_summary_or_progress_report_is_not_a_serialized_space(complete_config, serialized_space):
+    config = {**complete_config, "serialized_space": serialized_space}
+    with pytest.raises(ToolValidationError, match="not a complete Genie Agent export"):
+        prepare_envelope(space_id="space-1", config=config, max_config_bytes=1_000_000)
+
+
+@pytest.mark.parametrize("missing", ["version", "config", "data_sources"])
+def test_serialized_space_requires_export_signature(complete_config, missing):
+    serialized_space = {
+        "version": 2,
+        "config": {},
+        "data_sources": {"tables": []},
+    }
+    serialized_space.pop(missing)
+    config = {**complete_config, "serialized_space": json.dumps(serialized_space)}
+    with pytest.raises(ToolValidationError, match=missing):
+        prepare_envelope(space_id="space-1", config=config, max_config_bytes=1_000_000)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("version", True, "positive integer"),
+        ("version", 0, "positive integer"),
+        ("config", [], "must be a JSON object"),
+        ("data_sources", [], "must be a JSON object"),
+    ],
+)
+def test_serialized_space_export_signature_has_valid_types(complete_config, field, value, message):
+    serialized_space = {
+        "version": 2,
+        "config": {},
+        "data_sources": {"tables": []},
+    }
+    serialized_space[field] = value
+    config = {**complete_config, "serialized_space": json.dumps(serialized_space)}
+    with pytest.raises(ToolValidationError, match=message):
+        prepare_envelope(space_id="space-1", config=config, max_config_bytes=1_000_000)
+
+
+@pytest.mark.parametrize("collection", ["tables", "metric_views"])
+def test_serialized_space_data_source_collections_must_be_arrays(complete_config, collection):
+    serialized_space = {
+        "version": 2,
+        "config": {},
+        "data_sources": {collection: {}},
+    }
+    config = {**complete_config, "serialized_space": json.dumps(serialized_space)}
+    with pytest.raises(ToolValidationError, match="must be a JSON array"):
+        prepare_envelope(space_id="space-1", config=config, max_config_bytes=1_000_000)
+
+
 def test_space_id_mismatch_is_rejected(complete_config):
     config = {**complete_config, "space_id": "other-space"}
     with pytest.raises(ToolValidationError, match="must match"):
@@ -54,8 +115,13 @@ def test_reserved_event_fields_are_rejected(complete_config):
 def test_hash_is_canonical_and_excludes_etag(complete_config):
     first = copy.deepcopy(complete_config)
     second = copy.deepcopy(complete_config)
-    first["serialized_space"] = '{"b":2,"a":1}'
-    second["serialized_space"] = '{\n  "a": 1,\n  "b": 2\n}'
+    first["serialized_space"] = (
+        '{"version":2,"config":{"sample_questions":[]},"data_sources":{"tables":[]}}'
+    )
+    second["serialized_space"] = (
+        '{\n  "data_sources": {"tables": []},\n'
+        '  "config": {"sample_questions": []},\n  "version": 2\n}'
+    )
     second["etag"] = "newer-etag"
 
     p1 = prepare_envelope(space_id="space-1", config=first, max_config_bytes=1_000_000)
