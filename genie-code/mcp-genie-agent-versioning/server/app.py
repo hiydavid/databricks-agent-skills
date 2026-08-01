@@ -6,6 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastmcp import FastMCP
 
@@ -140,3 +141,21 @@ async def capture_obo_token(request: Request, call_next):
         return await call_next(request)
     finally:
         auth.obo_token_var.reset(reset)
+
+
+def _add_cors_middleware(target: FastAPI, configured_settings: Settings) -> None:
+    """Allow Genie Code's browser client from the App's Databricks workspace."""
+    allowed_origins = (
+        [configured_settings.workspace_origin] if configured_settings.workspace_origin else []
+    )
+    target.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["*"],
+        expose_headers=["Mcp-Session-Id"],
+    )
+
+
+_add_cors_middleware(app, settings)

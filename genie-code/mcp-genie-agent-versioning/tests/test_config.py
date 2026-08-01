@@ -14,9 +14,11 @@ def test_fresh_deployment_defaults_to_v2_schema():
             "HISTORY_GRANTEE": "group",
             "HISTORY_GRANTEE_USE_CATALOG_CONFIRMED": "true",
             "SQL_WAREHOUSE_ID": "warehouse",
+            "DATABRICKS_HOST": "https://example.cloud.databricks.com/",
         }
     )
     assert settings.history_schema == DEFAULT_HISTORY_SCHEMA == "genie_agent_versioning"
+    assert settings.workspace_origin == "https://example.cloud.databricks.com"
 
 
 def test_existing_deployment_can_explicitly_reuse_v1_schema():
@@ -38,6 +40,7 @@ def test_ownership_group_required_only_when_transfer_enabled():
         "HISTORY_GRANTEE": "group",
         "HISTORY_GRANTEE_USE_CATALOG_CONFIRMED": "true",
         "SQL_WAREHOUSE_ID": "warehouse",
+        "DATABRICKS_HOST": "https://example.cloud.databricks.com",
     }
     assert Settings.from_env(base).missing_required() == []
     enabled = Settings.from_env({**base, "TRANSFER_OWNERSHIP": "true"})

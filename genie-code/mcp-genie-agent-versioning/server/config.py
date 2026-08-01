@@ -42,6 +42,7 @@ class Settings:
     transfer_ownership: bool = False
     grantee_use_catalog_confirmed: bool = False
     max_config_bytes: int = DEFAULT_MAX_CONFIG_BYTES
+    workspace_origin: str = ""
 
     @property
     def fq_schema(self) -> str:
@@ -65,6 +66,7 @@ class Settings:
             max_config_bytes=_as_positive_int(
                 env.get("MAX_CONFIG_BYTES"), default=DEFAULT_MAX_CONFIG_BYTES
             ),
+            workspace_origin=env.get("DATABRICKS_HOST", "").strip().rstrip("/"),
         )
 
     def missing_required(self) -> list[str]:
@@ -73,6 +75,7 @@ class Settings:
             "HISTORY_SCHEMA": self.history_schema,
             "HISTORY_GRANTEE": self.history_grantee,
             "SQL_WAREHOUSE_ID": self.sql_warehouse_id,
+            "DATABRICKS_HOST": self.workspace_origin,
         }
         missing = [name for name, value in required.items() if not value]
         if self.transfer_ownership and not self.history_owner_group:
@@ -91,4 +94,5 @@ class Settings:
             "transfer_ownership": self.transfer_ownership,
             "grantee_use_catalog_confirmed": self.grantee_use_catalog_confirmed,
             "max_config_bytes": self.max_config_bytes,
+            "workspace_origin": self.workspace_origin,
         }

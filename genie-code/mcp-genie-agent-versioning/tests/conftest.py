@@ -100,6 +100,7 @@ def settings() -> Settings:
         history_grantee="genie_testers",
         sql_warehouse_id="wh123",
         grantee_use_catalog_confirmed=True,
+        workspace_origin="https://example.cloud.databricks.com",
     )
 
 

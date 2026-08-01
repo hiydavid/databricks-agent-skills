@@ -1,4 +1,4 @@
-# Databricks Apps manifest for the v2 Genie Agent Versioning MCP.
+# Databricks Apps manifest for the Genie Agent Versioning MCP.
 command:
   - "python"
   - "-m"
@@ -22,8 +22,8 @@ env:
     valueFrom: "sql-warehouse"
   - name: MAX_CONFIG_BYTES
     value: "5242880"
-  # Leave ownership with the app SP for a test deployment so bootstrap remains
-  # rerunnable. Production operators can opt into a one-time group handoff.
+  # Leave ownership with the app SP so bootstrap remains rerunnable. Operators can
+  # opt into a one-time group handoff after deciding who will manage schema changes.
   - name: TRANSFER_OWNERSHIP
     value: "false"
   - name: HISTORY_OWNER_GROUP
