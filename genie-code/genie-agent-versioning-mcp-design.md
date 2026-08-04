@@ -274,7 +274,7 @@ configuration versioning.
 
 Migration steps:
 
-1. Add `agent_config_versions` plus an admin-only `schema_migrations` ledger.
+1. Add `agent_config_versions` as the v2 configuration history table.
 2. Implement the three v2 tools and the simplified save contract.
 3. Keep OBO SQL and per-user row isolation.
 4. Preserve v1 snapshots as legacy partial records. The shipped v1 schema did not retain

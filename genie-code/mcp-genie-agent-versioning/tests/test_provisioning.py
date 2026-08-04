@@ -1,4 +1,4 @@
-"""V2 migration, row-filter, grant, and legacy-preservation bootstrap tests."""
+"""V2 provisioning, row-filter, grant, and legacy-preservation bootstrap tests."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def _runner(calls, *, fail_fragment=None, legacy=False):
     return run
 
 
-def test_bootstrap_creates_only_v2_user_table_and_migration_ledger(monkeypatch, settings):
+def test_bootstrap_creates_only_v2_user_table(monkeypatch, settings):
     calls = []
     monkeypatch.setattr(provisioning, "_run", _runner(calls))
     report = provisioning.bootstrap(_workspace(), settings)
@@ -39,7 +39,7 @@ def test_bootstrap_creates_only_v2_user_table_and_migration_ledger(monkeypatch, 
     assert report["ok"] is True
     joined = "\n".join(calls)
     assert schema.AGENT_CONFIG_VERSIONS in joined
-    assert schema.SCHEMA_MIGRATIONS in joined
+    assert "schema_migrations" not in joined
     assert "optimization_runs" not in joined
     assert "diagnose_reports" not in joined
     assert not any("CREATE CATALOG" in sql for sql in calls)
@@ -56,14 +56,6 @@ def test_table_has_required_defaults_and_row_filter(monkeypatch, settings):
     assert "delta.enableRowTracking = true" in joined
     assert "SET ROW FILTER" in joined
     assert "ON (created_by)" in joined
-
-
-def test_migration_record_is_idempotent_sql(monkeypatch, settings):
-    calls = []
-    monkeypatch.setattr(provisioning, "_run", _runner(calls))
-    provisioning.bootstrap(_workspace(), settings)
-    migration = next(sql for sql in calls if "record" not in sql and "WHERE NOT EXISTS" in sql)
-    assert f"version = {schema.CURRENT_SCHEMA_VERSION}" in migration
 
 
 def test_existing_expected_row_filter_is_not_reapplied(monkeypatch, settings):

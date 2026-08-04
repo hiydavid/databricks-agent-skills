@@ -1,4 +1,4 @@
-"""Idempotent v2 schema migration, row isolation, and least-privilege grants."""
+"""Idempotent v2 schema provisioning, row isolation, and least-privilege grants."""
 
 from __future__ import annotations
 
@@ -77,7 +77,6 @@ class _Report:
             "schema": settings.fq_schema,
             "grantee": settings.history_grantee,
             "owner_group": settings.history_owner_group or None,
-            "schema_version": schema.CURRENT_SCHEMA_VERSION,
             "catalog_created": False,
             "legacy_tables_preserved": [],
             "steps": [],
@@ -146,11 +145,6 @@ def bootstrap(workspace: WorkspaceClient, settings: Settings) -> dict:
         ),
         required=True,
     )
-    ledger_ok = report.attempt(
-        "create_schema_migrations",
-        lambda: _run(workspace, warehouse_id, schema.schema_migrations_ddl(fq_schema)),
-        required=True,
-    )
     function_ok = report.attempt(
         "create_only_mine_function",
         lambda: _run(workspace, warehouse_id, schema.only_mine_function_ddl(fq_schema)),
@@ -197,14 +191,6 @@ def bootstrap(workspace: WorkspaceClient, settings: Settings) -> dict:
     else:
         report.error("row_filter:agent_config_versions", "table or row-filter function unavailable")
 
-    migration_ok = False
-    if ledger_ok and table_ok and filter_ok:
-        migration_ok = report.attempt(
-            f"record_migration:{schema.CURRENT_SCHEMA_VERSION}",
-            lambda: _run(workspace, warehouse_id, schema.record_migration_sql(fq_schema)),
-            required=True,
-        )
-
     # V1 rows cannot be promoted automatically because v1 did not persist all outer
     # restore fields. Detect and report the legacy table, but deliberately leave it intact.
     try:
@@ -250,7 +236,7 @@ def bootstrap(workspace: WorkspaceClient, settings: Settings) -> dict:
             "are unchanged)",
         )
 
-    # Ownership transfer is opt-in because it makes future automatic migrations require
+    # Ownership transfer is opt-in because it makes future automatic schema changes require
     # the durable owner (or a principal with equivalent ALTER privileges). It is useful
     # after a production schema stabilizes, but unnecessary for a test deployment.
     if settings.transfer_ownership:
@@ -259,10 +245,6 @@ def bootstrap(workspace: WorkspaceClient, settings: Settings) -> dict:
             (
                 "agent_config_versions",
                 f"ALTER TABLE {versions_table} OWNER TO {owner}",
-            ),
-            (
-                "schema_migrations",
-                f"ALTER TABLE {fq_schema}.{quote_ident(schema.SCHEMA_MIGRATIONS)} OWNER TO {owner}",
             ),
             (
                 "only_mine",
@@ -280,11 +262,9 @@ def bootstrap(workspace: WorkspaceClient, settings: Settings) -> dict:
     report.data["ok"] = all(
         (
             schema_ok,
-            ledger_ok,
             function_ok,
             table_ok,
             filter_ok,
-            migration_ok,
             grant_catalog_ok,
             grant_schema_ok,
             grant_table_ok,
