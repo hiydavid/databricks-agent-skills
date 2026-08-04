@@ -130,8 +130,8 @@ def save_live_agent_config_version_core(
         if looks_like_scope_error(exc):
             raise OBOScopeError(
                 "The OBO token cannot read Genie spaces. Ensure the app declares the "
-                "`dashboards.genie` user scope and reconnect the MCP server.",
-                required_scope="dashboards.genie",
+                "`genie` user scope and reconnect the MCP server.",
+                required_scope="genie",
             ) from exc
         raise
 
@@ -258,7 +258,7 @@ def _run_tool(
     except DatabricksError as exc:
         if looks_like_scope_error(exc):
             logger.warning("tool=%s scope_error (api): %s", tool_name, exc)
-            return scope_error_payload(str(exc), required_scope="dashboards.genie")
+            return scope_error_payload(str(exc), required_scope="genie")
         logger.error("tool=%s genie_api_error: %s", tool_name, exc)
         return error_payload("genie_api_error", str(exc))
     except Exception as exc:  # noqa: BLE001

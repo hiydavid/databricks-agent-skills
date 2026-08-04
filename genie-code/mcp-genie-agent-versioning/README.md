@@ -37,7 +37,7 @@ rollback.
 - FastAPI + FastMCP on Databricks Apps, served by uvicorn.
 - App identity provisions the schema, table, row filter, and grants.
 - The live Genie read and every version read/write run as the calling user through OBO.
-- User authorization requires the `dashboards.genie` and `sql` scopes.
+- User authorization requires the `genie` and `sql` scopes.
 - A Unity Catalog row filter enforces `created_by = SESSION_USER()`, so histories are
   private per user even when users collaborate on the same Agent.
 - `/healthz` is process liveness. `/readyz` returns HTTP 503 until schema provisioning,
@@ -140,7 +140,7 @@ Edit [`app.yaml`](app.yaml):
 In the App configuration page:
 
 1. Add a **SQL warehouse** resource with key `sql-warehouse` and **CAN USE** permission.
-2. Enable **User authorization** and approve the `sql` and `dashboards.genie` scopes
+2. Enable **User authorization** and approve the `sql` and `genie` scopes
    declared in `app.yaml`.
 3. Give App users **CAN USE** on the App; reserve **CAN MANAGE** for trusted developers.
 

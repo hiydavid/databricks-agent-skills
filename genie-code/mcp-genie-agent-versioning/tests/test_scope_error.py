@@ -78,7 +78,7 @@ def test_genie_scope_failure_identifies_dashboards_scope(store):
             reason="before_update",
         )
 
-    assert raised.value.required_scope == "dashboards.genie"
+    assert raised.value.required_scope == "genie"
 
 
 def test_uc_grant_denial_is_not_mislabeled():

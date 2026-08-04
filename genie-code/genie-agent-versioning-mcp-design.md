@@ -91,7 +91,7 @@ Genie Code ──native tools──▶ update/rollback Genie Agent
 The snapshot fetch and all version reads/writes use the caller's OBO identity. The app
 service principal is used only for schema/table provisioning.
 
-Required user OAuth scopes: `dashboards.genie` for the live snapshot read and `sql` for
+Required user OAuth scopes: `genie` for the live snapshot read and `sql` for
 version persistence. Fetching `serialized_space` also requires CAN EDIT on the Agent.
 
 ### Privacy model

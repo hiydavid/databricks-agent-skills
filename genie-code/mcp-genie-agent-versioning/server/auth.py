@@ -59,6 +59,6 @@ def get_user_workspace_client() -> WorkspaceClient:
         raise OBOScopeError(
             f"OBO token missing: no '{OBO_HEADER}' header on the request. Confirm OBO is "
             "enabled in the Previews portal and the app declares the required `sql` and "
-            "`dashboards.genie` user scopes.",
+            "`genie` user scopes.",
         )
     return WorkspaceClient(token=token, auth_type="pat")
