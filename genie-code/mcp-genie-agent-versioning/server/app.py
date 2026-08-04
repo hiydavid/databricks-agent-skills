@@ -19,6 +19,15 @@ logger = logging.getLogger("mcp-genie-agent-versioning")
 
 settings = Settings.from_env()
 
+# Genie Code can be served from a workspace alias that differs from the canonical
+# DATABRICKS_HOST injected into the App. Restrict automatic aliases to official
+# Databricks workspace domains.
+TRUSTED_DATABRICKS_ORIGIN_REGEX = (
+    r"^https://(?:[a-zA-Z0-9-]+\.)*"
+    r"(?:cloud\.databricks\.com|cloud\.databricks\.us|"
+    r"azuredatabricks\.net|gcp\.databricks\.com)$"
+)
+
 readiness: dict[str, object] = {
     "ready": False,
     "message": "startup bootstrap has not completed",
@@ -158,6 +167,7 @@ def _add_cors_middleware(target: FastAPI, configured_settings: Settings) -> None
     target.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
+        allow_origin_regex=TRUSTED_DATABRICKS_ORIGIN_REGEX,
         allow_credentials=True,
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["*"],

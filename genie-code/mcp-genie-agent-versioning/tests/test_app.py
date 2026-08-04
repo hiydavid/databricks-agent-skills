@@ -6,6 +6,7 @@ import asyncio
 import dataclasses
 import json
 
+import pytest
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
@@ -72,8 +73,33 @@ def test_mcp_cors_preflight_allows_configured_workspace_origin(settings: Setting
     assert response.headers["access-control-allow-origin"] == origin
 
 
-def test_mcp_cors_preflight_allows_explicit_workspace_alias(settings: Settings):
-    origin = "https://workspace-alias.cloud.databricks.com"
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://fevm-dhuang.cloud.databricks.com",
+        "https://adb-1234567890123456.7.azuredatabricks.net",
+        "https://1234567890123456.7.gcp.databricks.com",
+    ],
+)
+def test_mcp_cors_preflight_allows_official_workspace_alias(settings: Settings, origin: str):
+    cors_app = FastAPI()
+    app_module._add_cors_middleware(cors_app, settings)
+
+    response = TestClient(cors_app).options(
+        "/mcp",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,mcp-protocol-version",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_mcp_cors_preflight_allows_explicit_nonstandard_alias(settings: Settings):
+    origin = "https://genie-code.internal.example.com"
     settings = dataclasses.replace(settings, workspace_origin_aliases=(origin,))
     cors_app = FastAPI()
     app_module._add_cors_middleware(cors_app, settings)
@@ -91,14 +117,14 @@ def test_mcp_cors_preflight_allows_explicit_workspace_alias(settings: Settings):
     assert response.headers["access-control-allow-origin"] == origin
 
 
-def test_mcp_cors_preflight_rejects_other_databricks_workspace(settings: Settings):
+def test_mcp_cors_preflight_rejects_untrusted_origin(settings: Settings):
     cors_app = FastAPI()
     app_module._add_cors_middleware(cors_app, settings)
 
     response = TestClient(cors_app).options(
         "/mcp",
         headers={
-            "Origin": "https://other-customer.cloud.databricks.com",
+            "Origin": "https://cloud.databricks.com.attacker.example",
             "Access-Control-Request-Method": "POST",
         },
     )
@@ -122,12 +148,15 @@ def test_shipped_app_has_cors_outside_obo_token_capture():
             ),
         )
     ]
-    assert "allow_origin_regex" not in middleware[cors_index].kwargs
+    assert (
+        middleware[cors_index].kwargs["allow_origin_regex"]
+        == app_module.TRUSTED_DATABRICKS_ORIGIN_REGEX
+    )
 
     response = TestClient(app_module.app).options(
         "/mcp",
         headers={
-            "Origin": "https://other-customer.cloud.databricks.com",
+            "Origin": "https://cloud.databricks.com.attacker.example",
             "Access-Control-Request-Method": "POST",
         },
     )

@@ -14,7 +14,7 @@ def test_fresh_deployment_defaults_to_v2_schema():
             "HISTORY_GRANTEE": "group",
             "HISTORY_GRANTEE_USE_CATALOG_CONFIRMED": "true",
             "SQL_WAREHOUSE_ID": "warehouse",
-            "DATABRICKS_HOST": "https://example.cloud.databricks.com/",
+            "DATABRICKS_HOST": "example.cloud.databricks.com/",
         }
     )
     assert settings.history_schema == DEFAULT_HISTORY_SCHEMA == "genie_agent_versioning"

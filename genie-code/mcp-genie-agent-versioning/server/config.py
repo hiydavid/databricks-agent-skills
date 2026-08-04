@@ -26,6 +26,13 @@ def _as_positive_int(value: Optional[str], *, default: int) -> int:
     return parsed
 
 
+def _as_workspace_origin(value: Optional[str]) -> str:
+    origin = (value or "").strip().rstrip("/")
+    if origin and "://" not in origin:
+        origin = f"https://{origin}"
+    return origin
+
+
 def _as_origin_aliases(value: Optional[str]) -> tuple[str, ...]:
     aliases: list[str] = []
     for raw_alias in (value or "").split(","):
@@ -88,7 +95,7 @@ class Settings:
             max_config_bytes=_as_positive_int(
                 env.get("MAX_CONFIG_BYTES"), default=DEFAULT_MAX_CONFIG_BYTES
             ),
-            workspace_origin=env.get("DATABRICKS_HOST", "").strip().rstrip("/"),
+            workspace_origin=_as_workspace_origin(env.get("DATABRICKS_HOST")),
             workspace_origin_aliases=_as_origin_aliases(env.get("DATABRICKS_ORIGIN_ALIASES")),
         )
 
