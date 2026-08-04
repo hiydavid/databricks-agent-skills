@@ -13,6 +13,7 @@ actionable, machine-readable result. The two shapes that matter most:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -67,8 +68,9 @@ _SCOPE_MARKERS = (
     "missing scope",
     "unauthorized",
     "unauthenticated",
-    "401",
 )
+
+_HTTP_401_RE = re.compile(r"(?:\bhttp(?: status)?|\bstatus(?: code)?\s*[:=]?)\s*401\b", re.I)
 
 # SDK exception class names that are unambiguously token/identity-auth failures
 # (401-class). ``PermissionDenied`` (403, a UC grant issue) is deliberately EXCLUDED
@@ -88,4 +90,4 @@ def looks_like_scope_error(exc: Exception) -> bool:
     if type(exc).__name__ in _SCOPE_EXCEPTION_NAMES:
         return True
     msg = str(exc).lower()
-    return any(marker in msg for marker in _SCOPE_MARKERS)
+    return any(marker in msg for marker in _SCOPE_MARKERS) or bool(_HTTP_401_RE.search(msg))

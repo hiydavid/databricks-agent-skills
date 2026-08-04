@@ -46,11 +46,6 @@ def quote_ident(name: str) -> str:
     return f"`{name}`"
 
 
-def quote_fqn(*parts: str) -> str:
-    """Validate + quote each part of a dotted name (``catalog.schema.table``)."""
-    return ".".join(quote_ident(p) for p in parts)
-
-
 @dataclass(frozen=True)
 class Param:
     """A server-side bound parameter (SDK-free; the adapter maps it to the SDK type).
@@ -78,10 +73,6 @@ class QueryResult:
     def first(self) -> Optional[dict]:
         ds = self.dicts()
         return ds[0] if ds else None
-
-    def scalar(self):
-        """The single (row 0, col 0) value, or ``None`` if there are no rows."""
-        return self.rows[0][0] if self.rows and self.rows[0] else None
 
 
 # A storage-facing SQL executor: run a statement (with optional bound params) and
@@ -121,15 +112,20 @@ def exec_sql(
         resp = w.statement_execution.get_statement(statement_id)
 
     state = resp.status.state if resp.status else None
+    if state == StatementState.CLOSED and re.match(r"^\s*INSERT\b", statement, re.IGNORECASE):
+        # INSERT has no result set to recover. CLOSED means execution completed but the
+        # statement/result metadata expired before it was read back, so retrying would
+        # risk appending a duplicate row.
+        return resp
     if state != StatementState.SUCCEEDED:
         err = ""
         if resp.status and resp.status.error:
             err = resp.status.error.message or ""
-        raise SqlError(
-            f"SQL {state}: {err}",
-            state=state.value if state else None,
-            statement=statement,
-        )
+        state_value = state.value if state else "UNKNOWN"
+        message = f"SQL {state_value}"
+        if err:
+            message += f": {err}"
+        raise SqlError(message, state=state.value if state else None, statement=statement)
     return resp
 
 

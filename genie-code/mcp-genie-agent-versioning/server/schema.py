@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS {fq}.{AGENT_CONFIG_VERSIONS} (
   parent_version_id          STRING,
   rollback_target_version_id STRING,
   created_at                 TIMESTAMP NOT NULL DEFAULT current_timestamp(),
-  created_by                 STRING    NOT NULL DEFAULT current_user()
+  created_by                 STRING    NOT NULL DEFAULT SESSION_USER()
 ) USING DELTA {_TBLPROPERTIES}
 """.strip()
 
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS {fq}.{SCHEMA_MIGRATIONS} (
   version       INT       NOT NULL,
   migration     STRING    NOT NULL,
   applied_at    TIMESTAMP NOT NULL DEFAULT current_timestamp(),
-  applied_by    STRING    NOT NULL DEFAULT current_user()
+  applied_by    STRING    NOT NULL DEFAULT SESSION_USER()
 ) USING DELTA {_TBLPROPERTIES}
 """.strip()
 
@@ -62,13 +62,8 @@ def record_migration_sql(fq: str) -> str:
     """Idempotently record the v2 schema migration."""
     return f"""
 INSERT INTO {fq}.{SCHEMA_MIGRATIONS} (version, migration, applied_at, applied_by)
-SELECT {CURRENT_SCHEMA_VERSION}, '{CURRENT_MIGRATION_NAME}', current_timestamp(), current_user()
+SELECT {CURRENT_SCHEMA_VERSION}, '{CURRENT_MIGRATION_NAME}', current_timestamp(), SESSION_USER()
 WHERE NOT EXISTS (
   SELECT 1 FROM {fq}.{SCHEMA_MIGRATIONS} WHERE version = {CURRENT_SCHEMA_VERSION}
 )
 """.strip()
-
-
-USER_DATA_TABLES: tuple[str, ...] = (AGENT_CONFIG_VERSIONS,)
-ADMIN_TABLES: tuple[str, ...] = (SCHEMA_MIGRATIONS,)
-ALL_TABLE_NAMES: tuple[str, ...] = (*USER_DATA_TABLES, *ADMIN_TABLES)

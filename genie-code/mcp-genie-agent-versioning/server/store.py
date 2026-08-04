@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Optional
+from typing import Optional
 
 from . import schema
 from .config import Settings
 from .contracts import VersionCursor
-from .sql import Param, QueryResult, SqlExec, quote_ident
+from .sql import Param, SqlExec, quote_ident
 
 
 class _InsertBuilder:
@@ -19,12 +19,14 @@ class _InsertBuilder:
         self._expressions: list[str] = []
         self._parameters: list[Param] = []
 
-    def set(self, column: str, value: Any) -> None:
+    def set(self, column: str, value: Optional[str]) -> None:
         if value is None:
             return
+        if not isinstance(value, str):
+            raise TypeError(f"bound value for {column!r} must be a string or None")
         self._columns.append(quote_ident(column))
         self._expressions.append(f":{column}")
-        self._parameters.append(Param(column, str(value)))
+        self._parameters.append(Param(column, value))
 
     def set_raw(self, column: str, expression: str) -> None:
         self._columns.append(quote_ident(column))
@@ -66,6 +68,31 @@ class AgentVersionStore:
             [Param("space_id", space_id), Param("version_id", version_id)],
         ).first()
 
+    def agent_version_exists(self, *, space_id: str, version_id: str) -> bool:
+        """Check a lineage reference without loading its configuration envelope."""
+        sql = (
+            f"SELECT 1 AS present FROM {self._versions_table} "
+            "WHERE space_id = :space_id AND version_id = :version_id LIMIT 1"
+        )
+        return (
+            self._run(
+                sql,
+                [Param("space_id", space_id), Param("version_id", version_id)],
+            ).first()
+            is not None
+        )
+
+    def _get_saved_version_metadata(self, *, space_id: str, version_id: str) -> Optional[dict]:
+        sql = (
+            "SELECT version_id, created_at, created_by, config_hash "
+            f"FROM {self._versions_table} "
+            "WHERE space_id = :space_id AND version_id = :version_id LIMIT 1"
+        )
+        return self._run(
+            sql,
+            [Param("space_id", space_id), Param("version_id", version_id)],
+        ).first()
+
     def save_agent_config_version(
         self,
         *,
@@ -89,11 +116,11 @@ class AgentVersionStore:
         builder.set("parent_version_id", parent_version_id)
         builder.set("rollback_target_version_id", rollback_target_version_id)
         builder.set_raw("created_at", "current_timestamp()")
-        builder.set_raw("created_by", "current_user()")
+        builder.set_raw("created_by", "SESSION_USER()")
         sql, parameters = builder.build(self._versions_table)
         self._run(sql, parameters)
 
-        saved = self.get_agent_version(space_id=space_id, version_id=version_id)
+        saved = self._get_saved_version_metadata(space_id=space_id, version_id=version_id)
         if saved is None:
             raise RuntimeError("version insert succeeded but the saved row could not be read back")
         return saved
@@ -128,7 +155,3 @@ class AgentVersionStore:
             f"ORDER BY created_at DESC, version_id DESC LIMIT {sql_limit}"
         )
         return self._run(sql, parameters).dicts()
-
-
-def query_result_to_dicts(result: QueryResult) -> list[dict]:
-    return result.dicts()

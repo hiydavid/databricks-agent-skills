@@ -220,8 +220,9 @@ the App in the UI rather than entering this URL manually. See the
 
 Genie Code calls the MCP from the workspace UI, so the browser first sends an
 `OPTIONS /mcp` CORS preflight. The App automatically allows the workspace origin supplied
-by the Databricks Apps runtime in `DATABRICKS_HOST` and workspace aliases on official
-Databricks domains; no CORS setting is required.
+by the Databricks Apps runtime in `DATABRICKS_HOST`. If Genie Code is served from a
+different workspace alias, add that exact HTTPS origin to `DATABRICKS_ORIGIN_ALIASES`;
+unlisted Databricks workspaces are rejected.
 
 The MCP exposes versioning tools, but it cannot intercept native Genie Agent edits. Add a
 persistent custom instruction so Genie Code applies the snapshot requirement throughout
@@ -263,6 +264,7 @@ instruction is more reliable across long sessions. See the
 | `MAX_CONFIG_BYTES` | Maximum UTF-8 envelope size; defaults to 5 MiB. |
 | `TRANSFER_OWNERSHIP` | Opt-in durable group ownership handoff; defaults to `false`. |
 | `HISTORY_OWNER_GROUP` | Required only when ownership transfer is enabled. |
+| `DATABRICKS_ORIGIN_ALIASES` | Optional comma-separated exact HTTPS workspace origins allowed by CORS in addition to `DATABRICKS_HOST`. |
 
 Leave `TRANSFER_OWNERSHIP=false` while the App manages schema changes. An operator can
 enable a one-time transfer to a durable owner group after deciding that the group will

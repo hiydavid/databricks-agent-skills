@@ -52,7 +52,7 @@ def test_table_has_required_defaults_and_row_filter(monkeypatch, settings):
     provisioning.bootstrap(_workspace(), settings)
     joined = "\n".join(calls)
     assert "created_at                 TIMESTAMP NOT NULL DEFAULT current_timestamp()" in joined
-    assert "created_by                 STRING    NOT NULL DEFAULT current_user()" in joined
+    assert "created_by                 STRING    NOT NULL DEFAULT SESSION_USER()" in joined
     assert "delta.enableRowTracking = true" in joined
     assert "SET ROW FILTER" in joined
     assert "ON (created_by)" in joined
@@ -64,6 +64,55 @@ def test_migration_record_is_idempotent_sql(monkeypatch, settings):
     provisioning.bootstrap(_workspace(), settings)
     migration = next(sql for sql in calls if "record" not in sql and "WHERE NOT EXISTS" in sql)
     assert f"version = {schema.CURRENT_SCHEMA_VERSION}" in migration
+
+
+def test_existing_expected_row_filter_is_not_reapplied(monkeypatch, settings):
+    calls = []
+    expected_rows = [
+        ["# Row Filter", "", ""],
+        ["Function", "`testcat`.`genie_agent_versioning`.`only_mine`", ""],
+        ["Arguments", "[`created_by`]", ""],
+        ["# Detailed Table Information", "", ""],
+    ]
+
+    def run(_workspace, _warehouse_id, sql):
+        calls.append(sql)
+        if "DESCRIBE TABLE EXTENDED" in sql:
+            return _response(expected_rows)
+        return _response()
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    report = provisioning.bootstrap(_workspace(), settings)
+
+    assert report["ok"] is True
+    assert not any("SET ROW FILTER" in sql for sql in calls)
+    assert {
+        "step": "row_filter:agent_config_versions",
+        "status": "already_configured",
+    } in report["steps"]
+
+
+def test_different_existing_row_filter_fails_closed(monkeypatch, settings):
+    calls = []
+    unexpected_rows = [
+        ["# Row Filter", "", ""],
+        ["Function", "`testcat`.`other`.`filter`", ""],
+        ["Arguments", "[`tenant_id`]", ""],
+    ]
+
+    def run(_workspace, _warehouse_id, sql):
+        calls.append(sql)
+        if "DESCRIBE TABLE EXTENDED" in sql:
+            return _response(unexpected_rows)
+        return _response()
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    report = provisioning.bootstrap(_workspace(), settings)
+
+    assert report["ok"] is False
+    assert not any("SET ROW FILTER" in sql for sql in calls)
+    assert not any("GRANT SELECT, MODIFY" in sql for sql in calls)
+    assert any("different row filter" in error for error in report["errors"])
 
 
 def test_row_filter_failure_withholds_data_grant(monkeypatch, settings):

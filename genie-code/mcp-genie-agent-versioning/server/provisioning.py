@@ -25,6 +25,50 @@ def _rows(response) -> list:
     return []
 
 
+def _normalized_identifier(value: str) -> str:
+    return "".join(value.replace("`", "").lower().split())
+
+
+def _row_filter_binding(response) -> tuple[str, str] | None:
+    """Extract the function and arguments from DESCRIBE TABLE EXTENDED output."""
+    in_row_filter = False
+    function = ""
+    arguments = ""
+    for row in _rows(response):
+        cells = ["" if value is None else str(value).strip() for value in row]
+        if not cells:
+            continue
+        label = cells[0].lower().lstrip("# ").replace("_", " ")
+        value = " ".join(cell for cell in cells[1:] if cell)
+        if label == "row filter":
+            in_row_filter = True
+            # Some runtimes report the whole binding on the section-heading row.
+            if value:
+                function = value
+                arguments = value
+            continue
+        if in_row_filter and cells[0].startswith("#"):
+            break
+        if not in_row_filter:
+            continue
+        if label == "function":
+            function = value
+        elif label in ("arguments", "argument"):
+            arguments = value
+    if not function and not arguments:
+        return None
+    return function, arguments
+
+
+def _is_expected_row_filter(
+    binding: tuple[str, str], *, expected_function: str, expected_argument: str
+) -> bool:
+    function, arguments = binding
+    return _normalized_identifier(expected_function) in _normalized_identifier(
+        function
+    ) and _normalized_identifier(expected_argument) in _normalized_identifier(arguments)
+
+
 class _Report:
     def __init__(self, settings: Settings) -> None:
         self.data: dict[str, Any] = {
@@ -121,15 +165,35 @@ def bootstrap(workspace: WorkspaceClient, settings: Settings) -> dict:
     versions_table = f"{fq_schema}.{quote_ident(schema.AGENT_CONFIG_VERSIONS)}"
     filter_ok = False
     if function_ok and table_ok:
+        filter_step = "row_filter:agent_config_versions"
+        filter_function = f"{fq_schema}.{quote_ident(schema.ROW_FILTER_FUNCTION)}"
         filter_sql = (
-            f"ALTER TABLE {versions_table} SET ROW FILTER "
-            f"{fq_schema}.{quote_ident(schema.ROW_FILTER_FUNCTION)} ON (created_by)"
+            f"ALTER TABLE {versions_table} SET ROW FILTER {filter_function} ON (created_by)"
         )
-        filter_ok = report.attempt(
-            "row_filter:agent_config_versions",
-            lambda: _run(workspace, warehouse_id, filter_sql),
-            required=True,
-        )
+        try:
+            described = _run(
+                workspace,
+                warehouse_id,
+                f"DESCRIBE TABLE EXTENDED {versions_table}",
+            )
+            binding = _row_filter_binding(described)
+            if binding is None:
+                _run(workspace, warehouse_id, filter_sql)
+                report.step(filter_step, "ok")
+            elif _is_expected_row_filter(
+                binding,
+                expected_function=filter_function,
+                expected_argument="created_by",
+            ):
+                report.step(filter_step, "already_configured")
+            else:
+                raise RuntimeError(
+                    "table already has a different row filter; refusing to replace it: "
+                    f"function={binding[0]!r}, arguments={binding[1]!r}"
+                )
+            filter_ok = True
+        except Exception as exc:  # noqa: BLE001 - bootstrap returns a complete report
+            report.error(filter_step, exc)
     else:
         report.error("row_filter:agent_config_versions", "table or row-filter function unavailable")
 
@@ -182,7 +246,8 @@ def bootstrap(workspace: WorkspaceClient, settings: Settings) -> dict:
     else:
         report.error(
             "grant_withheld:grantee:agent_config_versions",
-            "row filter not applied; withholding SELECT/MODIFY",
+            "row filter not verified; not issuing SELECT/MODIFY (existing grants, if any, "
+            "are unchanged)",
         )
 
     # Ownership transfer is opt-in because it makes future automatic migrations require

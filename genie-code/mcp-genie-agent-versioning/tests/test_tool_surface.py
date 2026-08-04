@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import threading
 from typing import Any, cast
 
 from fastmcp import FastMCP
 
+from server import tools as tools_module
 from server.tools import register_tools
 
 
@@ -52,3 +55,31 @@ def test_get_description_warns_about_historical_etag(settings):
     get = _registered_tools(server)["get_agent_version"]
     assert "historical provenance only" in get.description
     assert "fresh etag" in get.description
+
+
+def test_registered_tools_offload_blocking_work_and_can_overlap(monkeypatch, settings):
+    server = FastMCP(name="test")
+    register_tools(server, settings)
+    get = _registered_tools(server)["get_agent_version"]
+    assert inspect.iscoroutinefunction(get.fn)
+
+    main_thread = threading.get_ident()
+    worker_threads: list[int] = []
+    barrier = threading.Barrier(2, timeout=2)
+
+    def blocking_run_tool(_settings, _tool_name, _core):
+        worker_threads.append(threading.get_ident())
+        barrier.wait()
+        return {"ok": True}
+
+    monkeypatch.setattr(tools_module, "_run_tool", blocking_run_tool)
+
+    async def invoke_twice():
+        return await asyncio.gather(
+            get.fn(space_id="space-1", version_id="one"),
+            get.fn(space_id="space-1", version_id="two"),
+        )
+
+    assert asyncio.run(invoke_twice()) == [{"ok": True}, {"ok": True}]
+    assert len(set(worker_threads)) == 2
+    assert main_thread not in worker_threads

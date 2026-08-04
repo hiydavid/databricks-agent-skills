@@ -59,6 +59,18 @@ def test_uc_grant_denial_is_not_mislabeled():
     assert looks_like_scope_error(SqlError("invalid_token")) is True
 
 
+@pytest.mark.parametrize(
+    "message",
+    ["table orders_401 does not exist", "query returned 401 rows"],
+)
+def test_incidental_401_is_not_mislabeled(message):
+    assert looks_like_scope_error(SqlError(message)) is False
+
+
+def test_explicit_http_401_is_classified():
+    assert looks_like_scope_error(SqlError("HTTP status 401")) is True
+
+
 def test_auth_helper_never_falls_back_to_app_identity(monkeypatch, no_obo_token):
     monkeypatch.setenv("DATABRICKS_APP_NAME", "mcp-genie-agent-versioning")
     with pytest.raises(OBOScopeError):

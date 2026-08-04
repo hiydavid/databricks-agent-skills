@@ -6,6 +6,7 @@ import json
 import logging
 from typing import Annotated, Any, Callable, Optional
 
+from anyio import to_thread
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import auth
@@ -66,7 +67,7 @@ def _require_existing_reference(
     if version_id is None:
         return None
     require_nonempty_string(version_id, field_name)
-    if store.get_agent_version(space_id=space_id, version_id=version_id) is None:
+    if not store.agent_version_exists(space_id=space_id, version_id=version_id):
         raise ToolValidationError(
             f"`{field_name}` does not identify a version visible for this `space_id`."
         )
@@ -244,7 +245,7 @@ def register_tools(mcp_server, settings: Settings) -> None:
     """Register exactly the three v2 configuration-version tools."""
 
     @mcp_server.tool
-    def save_agent_config_version(
+    async def save_agent_config_version(
         space_id: str,
         config: Annotated[
             AgentConfigInput,
@@ -269,7 +270,8 @@ def register_tools(mcp_server, settings: Settings) -> None:
         an older version. Every successful call appends a distinct version, even for
         identical content.
         """
-        return _run_tool(
+        return await to_thread.run_sync(
+            _run_tool,
             settings,
             "save_agent_config_version",
             lambda store: save_agent_config_version_core(
@@ -284,7 +286,7 @@ def register_tools(mcp_server, settings: Settings) -> None:
         )
 
     @mcp_server.tool
-    def list_agent_versions(
+    async def list_agent_versions(
         space_id: str,
         limit: int = DEFAULT_LIST_LIMIT,
         cursor: Optional[str] = None,
@@ -295,7 +297,8 @@ def register_tools(mcp_server, settings: Settings) -> None:
         the selected version and then save the current live configuration with
         ``save_agent_config_version(reason='before_rollback')``.
         """
-        return _run_tool(
+        return await to_thread.run_sync(
+            _run_tool,
             settings,
             "list_agent_versions",
             lambda store: list_agent_versions_core(
@@ -307,14 +310,15 @@ def register_tools(mcp_server, settings: Settings) -> None:
         )
 
     @mcp_server.tool
-    def get_agent_version(space_id: str, version_id: str) -> dict:
+    async def get_agent_version(space_id: str, version_id: str) -> dict:
         """Retrieve one complete version scoped to its Genie Agent.
 
         The returned etag is historical provenance only. Before applying this version,
         read the current live Agent and use its fresh etag as the update lock. Save that
         current state first and stop without rollback if the save fails.
         """
-        return _run_tool(
+        return await to_thread.run_sync(
+            _run_tool,
             settings,
             "get_agent_version",
             lambda store: get_agent_version_core(

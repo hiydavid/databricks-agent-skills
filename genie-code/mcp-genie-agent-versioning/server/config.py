@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Mapping, Optional
+from urllib.parse import urlsplit
 
 DEFAULT_HISTORY_SCHEMA = "genie_agent_versioning"
 DEFAULT_MAX_CONFIG_BYTES = 5 * 1024 * 1024
@@ -25,6 +26,26 @@ def _as_positive_int(value: Optional[str], *, default: int) -> int:
     return parsed
 
 
+def _as_origin_aliases(value: Optional[str]) -> tuple[str, ...]:
+    aliases: list[str] = []
+    for raw_alias in (value or "").split(","):
+        alias = raw_alias.strip().rstrip("/")
+        if not alias:
+            continue
+        parsed = urlsplit(alias)
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("DATABRICKS_ORIGIN_ALIASES must contain comma-separated HTTPS origins")
+        if alias not in aliases:
+            aliases.append(alias)
+    return tuple(aliases)
+
+
 @dataclass(frozen=True)
 class Settings:
     """Resolved, immutable server configuration.
@@ -43,6 +64,7 @@ class Settings:
     grantee_use_catalog_confirmed: bool = False
     max_config_bytes: int = DEFAULT_MAX_CONFIG_BYTES
     workspace_origin: str = ""
+    workspace_origin_aliases: tuple[str, ...] = ()
 
     @property
     def fq_schema(self) -> str:
@@ -67,6 +89,7 @@ class Settings:
                 env.get("MAX_CONFIG_BYTES"), default=DEFAULT_MAX_CONFIG_BYTES
             ),
             workspace_origin=env.get("DATABRICKS_HOST", "").strip().rstrip("/"),
+            workspace_origin_aliases=_as_origin_aliases(env.get("DATABRICKS_ORIGIN_ALIASES")),
         )
 
     def missing_required(self) -> list[str]:
@@ -95,4 +118,5 @@ class Settings:
             "grantee_use_catalog_confirmed": self.grantee_use_catalog_confirmed,
             "max_config_bytes": self.max_config_bytes,
             "workspace_origin": self.workspace_origin,
+            "workspace_origin_aliases": self.workspace_origin_aliases,
         }

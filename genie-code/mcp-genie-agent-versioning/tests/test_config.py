@@ -50,3 +50,26 @@ def test_ownership_group_required_only_when_transfer_enabled():
 def test_max_payload_must_be_positive():
     with pytest.raises(ValueError, match="positive"):
         Settings.from_env({"MAX_CONFIG_BYTES": "0"})
+
+
+def test_workspace_origin_aliases_are_exact_https_origins():
+    settings = Settings.from_env(
+        {
+            "DATABRICKS_ORIGIN_ALIASES": (
+                "https://alias.cloud.databricks.com/, https://adb-123.4.azuredatabricks.net"
+            )
+        }
+    )
+    assert settings.workspace_origin_aliases == (
+        "https://alias.cloud.databricks.com",
+        "https://adb-123.4.azuredatabricks.net",
+    )
+
+
+@pytest.mark.parametrize(
+    "alias",
+    ["http://alias.cloud.databricks.com", "https://alias.cloud.databricks.com/path"],
+)
+def test_workspace_origin_aliases_reject_non_https_origins(alias):
+    with pytest.raises(ValueError, match="HTTPS origins"):
+        Settings.from_env({"DATABRICKS_ORIGIN_ALIASES": alias})

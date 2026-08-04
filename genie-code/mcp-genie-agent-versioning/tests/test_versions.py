@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
 import pytest
 
 from server import schema
 from server.errors import ToolValidationError
+from server.store import _InsertBuilder
 from server.tools import get_agent_version_core, save_agent_config_version_core
 
 from .conftest import param_value
@@ -28,7 +30,7 @@ def test_save_returns_sql_stamped_metadata(store, backend, complete_config):
     assert result["created_at"].startswith("2026-07-30")
 
     sql, params = backend.inserts_into(schema.AGENT_CONFIG_VERSIONS)[0]
-    assert "current_user()" in sql
+    assert "SESSION_USER()" in sql
     assert "current_timestamp()" in sql
     assert param_value(params, "created_by") is None
     assert param_value(params, "created_at") is None
@@ -157,6 +159,34 @@ def test_rollback_event_preserves_target_and_lineage(store, backend, complete_co
     assert not any(
         sql.lstrip().upper().startswith(("UPDATE", "DELETE", "MERGE")) for sql, _ in backend.calls
     )
+
+
+def test_save_lineage_checks_and_readback_never_select_envelope(store, backend, complete_config):
+    target = save_agent_config_version_core(
+        store, space_id="space-1", config=complete_config, reason="manual"
+    )
+    backend.calls.clear()
+
+    save_agent_config_version_core(
+        store,
+        space_id="space-1",
+        config=complete_config,
+        reason="before_rollback",
+        parent_version_id=target["version_id"],
+        rollback_target_version_id=target["version_id"],
+    )
+
+    selects = [sql for sql, _params in backend.calls if sql.lstrip().startswith("SELECT")]
+    assert len(selects) == 3
+    assert sum("SELECT 1 AS present" in sql for sql in selects) == 2
+    assert any("SELECT version_id, created_at, created_by, config_hash" in sql for sql in selects)
+    assert all("config_envelope" not in sql for sql in selects)
+
+
+def test_insert_builder_rejects_non_string_bound_values():
+    builder = _InsertBuilder()
+    with pytest.raises(TypeError, match="must be a string or None"):
+        builder.set("reason", cast(Any, False))
 
 
 def test_get_is_scoped_by_space_and_labels_historical_etag(store, complete_config):
