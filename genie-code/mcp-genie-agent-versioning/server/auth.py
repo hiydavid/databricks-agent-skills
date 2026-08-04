@@ -1,6 +1,6 @@
 """Identity & auth — OBO (per-request user) vs the app service principal (spec §5).
 
-  * **OBO** — every artifact read/write runs as the *calling user*. We build a
+  * **OBO** — every Genie read and artifact read/write runs as the *calling user*. We build a
     fresh ``WorkspaceClient`` from the ``X-Forwarded-Access-Token`` header on each
     request and NEVER cache it. UC row filters then isolate per user.
   * **App SP** — used ONLY for bootstrap/admin (schema + table provisioning).
@@ -58,6 +58,7 @@ def get_user_workspace_client() -> WorkspaceClient:
     if not token:
         raise OBOScopeError(
             f"OBO token missing: no '{OBO_HEADER}' header on the request. Confirm OBO is "
-            "enabled in the Previews portal and the app declares `user_api_scopes: sql`.",
+            "enabled in the Previews portal and the app declares the required `sql` and "
+            "`dashboards.genie` user scopes.",
         )
     return WorkspaceClient(token=token, auth_type="pat")

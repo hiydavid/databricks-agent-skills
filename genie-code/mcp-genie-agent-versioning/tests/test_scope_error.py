@@ -1,8 +1,13 @@
-"""OBO failures are structured and the user path requires only SQL scope."""
+"""OBO failures are structured for the SQL and Genie user scopes."""
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import cast
+
 import pytest
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import Unauthenticated
 
 from server import auth, tools
 from server.errors import OBOScopeError, looks_like_scope_error
@@ -23,14 +28,14 @@ def test_missing_obo_token_returns_scope_error(monkeypatch, settings, no_obo_tok
     result = tools._run_tool(
         settings,
         "save_agent_config_version",
-        lambda _store: pytest.fail("core must not run"),
+        lambda _workspace, _store: pytest.fail("core must not run"),
     )
     assert result["ok"] is False
     assert result["error_type"] == "scope_error"
     assert result["required_scope"] == "sql"
 
 
-def test_user_store_does_not_call_identity_api(monkeypatch, settings, backend):
+def test_user_context_reuses_obo_client_without_identity_api(monkeypatch, settings, backend):
     class IdentityAPI:
         def me(self):
             raise AssertionError("current_user.me() must not be called")
@@ -38,20 +43,42 @@ def test_user_store_does_not_call_identity_api(monkeypatch, settings, backend):
     class Workspace:
         current_user = IdentityAPI()
 
-    monkeypatch.setattr(auth, "get_user_workspace_client", lambda **_kwargs: Workspace())
+    workspace = Workspace()
+    monkeypatch.setattr(auth, "get_user_workspace_client", lambda **_kwargs: workspace)
     monkeypatch.setattr(tools, "make_sql_exec", lambda _workspace, _warehouse: backend)
-    store = tools._build_user_store(settings)
+    actual_workspace, store = tools._build_user_context(settings)
+    assert actual_workspace is workspace
     assert store.settings == settings
 
 
 def test_sql_scope_failure_is_classified(monkeypatch, settings, store):
-    monkeypatch.setattr(tools, "_build_user_store", lambda _settings: store)
+    monkeypatch.setattr(tools, "_build_user_context", lambda _settings: (object(), store))
 
-    def fail(_store):
+    def fail(_workspace, _store):
         raise SqlError("401 insufficient_scope", state="ERROR")
 
     result = tools._run_tool(settings, "get_agent_version", fail)
     assert result["error_type"] == "scope_error"
+
+
+def test_genie_scope_failure_identifies_dashboards_scope(store):
+    def fail(*_args, **_kwargs):
+        raise Unauthenticated("insufficient_scope")
+
+    workspace = cast(
+        WorkspaceClient,
+        SimpleNamespace(genie=SimpleNamespace(get_space=fail)),
+    )
+
+    with pytest.raises(OBOScopeError) as raised:
+        tools.save_live_agent_config_version_core(
+            workspace,
+            store,
+            space_id="space-1",
+            reason="before_update",
+        )
+
+    assert raised.value.required_scope == "dashboards.genie"
 
 
 def test_uc_grant_denial_is_not_mislabeled():

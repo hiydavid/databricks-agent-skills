@@ -4,9 +4,10 @@ The tools never raise raw exceptions back over MCP — they translate them into
 plain JSON-serializable dicts so the calling agent (Genie Code) gets an
 actionable, machine-readable result. The two shapes that matter most:
 
-  * ``scope_error`` — the forwarded OBO token is missing or lacks the ``sql``
-    scope (spec §5). The server NEVER silently falls back to the app SP for a
-    user write; it returns this so the user enables the scope.
+  * ``scope_error`` — the forwarded OBO token is missing or lacks a required
+    ``sql`` or ``dashboards.genie`` scope (spec §5). The server NEVER silently
+    falls back to the app SP for a user operation; it returns this so the user
+    enables the scope.
   * ``validation_error`` — the inputs violated a §7 field contract (e.g. an
     unknown ``artifact_type``, or a missing required field).
 """

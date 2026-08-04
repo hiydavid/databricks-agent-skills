@@ -1,11 +1,11 @@
 # Genie Agent Versioning MCP
 
 This Databricks App is a prompt-routed configuration version store for Genie Agents. It
-exposes stateless streamable HTTP at `/mcp`, stores complete caller-supplied configuration
-envelopes in Unity Catalog, and never reads or updates a live Genie Agent.
+exposes stateless streamable HTTP at `/mcp`, reads complete live configurations with the
+calling user's identity, and stores them in Unity Catalog. It never updates a live Agent.
 
-Genie Code remains responsible for reading the live configuration, saving it here before
-an edit, stopping if that save fails, and applying edits or rollbacks with native tools.
+Genie Code remains responsible for calling the save tool before an edit, stopping if that
+save fails, and applying edits or rollbacks with native tools.
 The contract and responsibility boundary are documented in
 [`../genie-agent-versioning-mcp-design.md`](../genie-agent-versioning-mcp-design.md).
 
@@ -13,33 +13,19 @@ The contract and responsibility boundary are documented in
 
 | Tool | Purpose |
 | --- | --- |
-| `save_agent_config_version` | Append a complete snapshot. Every successful call creates a new version, including identical content. |
+| `save_agent_config_version` | Fetch and append the current live configuration. Every successful call creates a new version, including identical content. |
 | `list_agent_versions` | List one Agent's private history with deterministic cursor pagination. |
 | `get_agent_version` | Retrieve one complete version using both `space_id` and `version_id`. |
 
-`save_agent_config_version.config` must include these keys:
+`save_agent_config_version` accepts `space_id`, `reason`, and optional lineage/summary
+fields. The MCP calls Get Genie Agent with `include_serialized_space=true` itself, using
+the caller's OBO identity. The large `serialized_space` value never passes through Genie
+Code's model context or tool arguments.
 
-```json
-{
-  "serialized_space": "{...}",
-  "title": "Agent title",
-  "description": "Description or null",
-  "warehouse_id": "warehouse-id",
-  "parent_path": "/Workspace/path or null",
-  "etag": "optional capture-time etag"
-}
-```
-
-Retrieve this object with Get Genie Agent using `include_serialized_space=true` and pass
-the returned `serialized_space` string exactly. A summary, benchmark result, pass rate, or
-other progress metadata is not a restorable snapshot and is rejected. The parsed string
-must contain the exported Genie fields `version`, `instructions`, and `data_sources`.
-Legacy exports containing `config` instead of `instructions` remain accepted.
-
-The five outer restore fields must be present even when a nullable value is `null`.
-Additional JSON-safe configuration fields are preserved. The server adds `format_version`
-and `space_id`, bounds the envelope to 5 MiB by default, and hashes canonical restore
-content without the historical `etag`.
+The server preserves `serialized_space`, title, description, warehouse, and parent path,
+adds `format_version` and `space_id`, bounds the envelope to 5 MiB by default, and hashes
+canonical restore content. Saving requires the caller to have at least CAN EDIT on the
+Agent because that permission is required for `include_serialized_space=true`.
 
 The optional `parent_version_id` records lineage. A `before_rollback` save must include a
 visible, same-Agent `rollback_target_version_id`. The etag returned by
@@ -50,8 +36,8 @@ rollback.
 
 - FastAPI + FastMCP on Databricks Apps, served by uvicorn.
 - App identity provisions the schema, table, row filter, and grants.
-- Every tool read/write runs as the calling user through OBO SQL.
-- The only user OAuth scope is `sql`; the tool path makes no identity or Genie API call.
+- The live Genie read and every version read/write run as the calling user through OBO.
+- User authorization requires the `dashboards.genie` and `sql` scopes.
 - A Unity Catalog row filter enforces `created_by = SESSION_USER()`, so histories are
   private per user even when users collaborate on the same Agent.
 - `/healthz` is process liveness. `/readyz` returns HTTP 503 until schema provisioning,
@@ -154,7 +140,8 @@ Edit [`app.yaml`](app.yaml):
 In the App configuration page:
 
 1. Add a **SQL warehouse** resource with key `sql-warehouse` and **CAN USE** permission.
-2. Enable **User authorization** and approve the `sql` scope declared in `app.yaml`.
+2. Enable **User authorization** and approve the `sql` and `dashboards.genie` scopes
+   declared in `app.yaml`.
 3. Give App users **CAN USE** on the App; reserve **CAN MANAGE** for trusted developers.
 
 `SQL_WAREHOUSE_ID` uses `valueFrom: sql-warehouse`; do not replace it with a hardcoded ID.
@@ -239,10 +226,10 @@ long, multi-step tasks:
 
 Add the following text to either instruction file:
 
-> Before changing any Genie Agent configuration, first read its complete current
-> configuration using Get Genie Agent with `include_serialized_space=true`, and save the
-> exact returned configuration with `save_agent_config_version` using reason
-> `before_update` or `before_rollback`. Proceed only if the save succeeds. Use
+> Before changing any Genie Agent configuration, first call
+> `save_agent_config_version` with its `space_id` and reason `before_update` or
+> `before_rollback`; the MCP fetches and stores the complete live configuration directly.
+> Proceed only if the save succeeds. Use
 > `list_agent_versions` and `get_agent_version` for rollback. If the MCP is unavailable
 > or the save fails, stop without editing. For rollback, use a freshly read live etag,
 > never the stored historical etag. Follow this rule even with Auto-Approve enabled.

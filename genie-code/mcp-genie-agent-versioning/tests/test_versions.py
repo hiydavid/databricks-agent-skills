@@ -3,16 +3,78 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from databricks.sdk import WorkspaceClient
 
 from server import schema
 from server.errors import ToolValidationError
 from server.store import _InsertBuilder
-from server.tools import get_agent_version_core, save_agent_config_version_core
+from server.tools import (
+    get_agent_version_core,
+    save_agent_config_version_core,
+    save_live_agent_config_version_core,
+)
 
 from .conftest import param_value
+
+
+def test_live_save_fetches_exact_export_server_side(store, backend, complete_config):
+    calls = []
+
+    class GenieAPI:
+        def get_space(self, space_id, *, include_serialized_space):
+            calls.append((space_id, include_serialized_space))
+            return SimpleNamespace(
+                space_id=space_id,
+                title=complete_config["title"],
+                description=complete_config["description"],
+                warehouse_id=complete_config["warehouse_id"],
+                parent_path=complete_config["parent_path"],
+                serialized_space=complete_config["serialized_space"],
+            )
+
+    workspace = cast(WorkspaceClient, SimpleNamespace(genie=GenieAPI()))
+
+    result = save_live_agent_config_version_core(
+        workspace,
+        store,
+        space_id="space-1",
+        reason="before_update",
+    )
+
+    assert result["ok"] is True
+    assert calls == [("space-1", True)]
+    row = backend.rows[schema.AGENT_CONFIG_VERSIONS][result["version_id"]]
+    envelope = json.loads(row["config_envelope"])
+    assert envelope["serialized_space"] == complete_config["serialized_space"]
+    assert envelope["title"] == complete_config["title"]
+
+
+def test_live_save_rejects_missing_serialized_export_before_write(store, backend):
+    space = SimpleNamespace(
+        title="Revenue analyst",
+        description=None,
+        warehouse_id="warehouse-1",
+        parent_path=None,
+        serialized_space=None,
+    )
+    workspace = cast(
+        WorkspaceClient,
+        SimpleNamespace(genie=SimpleNamespace(get_space=lambda *_args, **_kwargs: space)),
+    )
+
+    with pytest.raises(ToolValidationError, match="serialized_space"):
+        save_live_agent_config_version_core(
+            workspace,
+            store,
+            space_id="space-1",
+            reason="before_update",
+        )
+
+    assert backend.inserts_into(schema.AGENT_CONFIG_VERSIONS) == []
 
 
 def test_save_returns_sql_stamped_metadata(store, backend, complete_config):

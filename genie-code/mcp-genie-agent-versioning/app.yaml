@@ -4,9 +4,10 @@ command:
   - "-m"
   - "server.main"
 
-# User tool calls need only SQL. The app never calls the Genie API.
+# Save calls read the live Agent as the user, then persist through OBO SQL.
 user_api_scopes:
   - sql
+  - dashboards.genie
 
 env:
   - name: HISTORY_CATALOG

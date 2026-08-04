@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Annotated, Any, Callable, Optional
+from typing import Any, Callable, Optional
 
 from anyio import to_thread
-from pydantic import BaseModel, ConfigDict, Field
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors.base import DatabricksError
 
 from . import auth
 from .config import Settings
@@ -33,28 +34,6 @@ from .sql import SqlError, make_sql_exec
 from .store import AgentVersionStore
 
 logger = logging.getLogger("mcp-genie-agent-versioning.tools")
-
-
-class AgentConfigInput(BaseModel):
-    """Complete restore fields from a live Get Genie Agent response."""
-
-    model_config = ConfigDict(extra="allow")
-
-    serialized_space: str = Field(
-        description=(
-            "Exact string returned by Get Genie Agent with "
-            "`include_serialized_space=true`; never substitute a summary, status, or "
-            "evaluation report."
-        )
-    )
-    title: str
-    description: Optional[str]
-    warehouse_id: str
-    parent_path: Optional[str]
-    etag: Optional[str] = Field(
-        default=None,
-        description="Optional etag captured with the live configuration for provenance.",
-    )
 
 
 def _require_existing_reference(
@@ -133,6 +112,47 @@ def save_agent_config_version_core(
     }
 
 
+def save_live_agent_config_version_core(
+    workspace: WorkspaceClient,
+    store: AgentVersionStore,
+    *,
+    space_id: str,
+    reason: str,
+    change_summary: Optional[str] = None,
+    parent_version_id: Optional[str] = None,
+    rollback_target_version_id: Optional[str] = None,
+) -> dict:
+    """Fetch the exact live Genie export as the caller, then append its snapshot."""
+    require_nonempty_string(space_id, "space_id")
+    try:
+        space = workspace.genie.get_space(space_id, include_serialized_space=True)
+    except Exception as exc:
+        if looks_like_scope_error(exc):
+            raise OBOScopeError(
+                "The OBO token cannot read Genie spaces. Ensure the app declares the "
+                "`dashboards.genie` user scope and reconnect the MCP server.",
+                required_scope="dashboards.genie",
+            ) from exc
+        raise
+
+    config = {
+        "serialized_space": space.serialized_space,
+        "title": space.title,
+        "description": space.description,
+        "warehouse_id": space.warehouse_id,
+        "parent_path": space.parent_path,
+    }
+    return save_agent_config_version_core(
+        store,
+        space_id=space_id,
+        config=config,
+        reason=reason,
+        change_summary=change_summary,
+        parent_version_id=parent_version_id,
+        rollback_target_version_id=rollback_target_version_id,
+    )
+
+
 def list_agent_versions_core(
     store: AgentVersionStore,
     *,
@@ -206,19 +226,21 @@ def get_agent_version_core(
     }
 
 
-def _build_user_store(settings: Settings) -> AgentVersionStore:
-    """Build an OBO SQL store without making a separate identity API call."""
+def _build_user_context(settings: Settings) -> tuple[WorkspaceClient, AgentVersionStore]:
+    """Build one OBO client shared by the live Genie read and snapshot SQL write."""
     workspace = auth.get_user_workspace_client()
-    return AgentVersionStore(make_sql_exec(workspace, settings.sql_warehouse_id), settings)
+    store = AgentVersionStore(make_sql_exec(workspace, settings.sql_warehouse_id), settings)
+    return workspace, store
 
 
 def _run_tool(
     settings: Settings,
     tool_name: str,
-    core: Callable[[AgentVersionStore], dict],
+    core: Callable[[WorkspaceClient, AgentVersionStore], dict],
 ) -> dict:
     try:
-        result = core(_build_user_store(settings))
+        workspace, store = _build_user_context(settings)
+        result = core(workspace, store)
         logger.info("tool=%s ok=%s", tool_name, result.get("ok", True))
         return result
     except OBOScopeError as exc:
@@ -233,6 +255,12 @@ def _run_tool(
             return scope_error_payload(str(exc))
         logger.error("tool=%s sql_error: %s", tool_name, exc)
         return error_payload("sql_error", str(exc))
+    except DatabricksError as exc:
+        if looks_like_scope_error(exc):
+            logger.warning("tool=%s scope_error (api): %s", tool_name, exc)
+            return scope_error_payload(str(exc), required_scope="dashboards.genie")
+        logger.error("tool=%s genie_api_error: %s", tool_name, exc)
+        return error_payload("genie_api_error", str(exc))
     except Exception as exc:  # noqa: BLE001
         if looks_like_scope_error(exc):
             logger.warning("tool=%s scope_error (auth): %s", tool_name, exc)
@@ -247,15 +275,6 @@ def register_tools(mcp_server, settings: Settings) -> None:
     @mcp_server.tool
     async def save_agent_config_version(
         space_id: str,
-        config: Annotated[
-            AgentConfigInput,
-            Field(
-                description=(
-                    "Complete current live Genie Agent response, including the exact "
-                    "serialized configuration."
-                )
-            ),
-        ],
         reason: str,
         change_summary: Optional[str] = None,
         parent_version_id: Optional[str] = None,
@@ -263,21 +282,20 @@ def register_tools(mcp_server, settings: Settings) -> None:
     ) -> dict:
         """Save a complete Genie Agent configuration before any native edit.
 
-        First retrieve the Agent with ``include_serialized_space=true``. Pass the exact
-        returned ``serialized_space`` string, never a summary, status, or evaluation
-        report. Genie Code must stop without editing if the result is not ``ok: true``.
-        Use ``before_update`` before a normal edit and ``before_rollback`` before applying
-        an older version. Every successful call appends a distinct version, even for
-        identical content.
+        The MCP fetches the complete live Agent directly from the Genie API as the calling
+        user, so callers must not relay ``serialized_space``. Genie Code must stop without
+        editing if the result is not ``ok: true``. Use ``before_update`` before a normal
+        edit and ``before_rollback`` before applying an older version. Every successful
+        call appends a distinct version, even for identical content.
         """
         return await to_thread.run_sync(
             _run_tool,
             settings,
             "save_agent_config_version",
-            lambda store: save_agent_config_version_core(
+            lambda workspace, store: save_live_agent_config_version_core(
+                workspace,
                 store,
                 space_id=space_id,
-                config=config.model_dump(mode="json", exclude_unset=True),
                 reason=reason,
                 change_summary=change_summary,
                 parent_version_id=parent_version_id,
@@ -301,7 +319,7 @@ def register_tools(mcp_server, settings: Settings) -> None:
             _run_tool,
             settings,
             "list_agent_versions",
-            lambda store: list_agent_versions_core(
+            lambda _workspace, store: list_agent_versions_core(
                 store,
                 space_id=space_id,
                 limit=limit,
@@ -321,7 +339,7 @@ def register_tools(mcp_server, settings: Settings) -> None:
             _run_tool,
             settings,
             "get_agent_version",
-            lambda store: get_agent_version_core(
+            lambda _workspace, store: get_agent_version_core(
                 store,
                 space_id=space_id,
                 version_id=version_id,
