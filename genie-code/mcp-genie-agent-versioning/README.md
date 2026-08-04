@@ -8,8 +8,6 @@ a complete snapshot already visible in that user's version history.
 Genie Code remains responsible for calling the save tool before an edit, stopping if that
 save fails, and applying ordinary edits with native tools. Rollback is performed by the
 MCP so the large serialized configuration never passes through model context.
-The contract and responsibility boundary are documented in
-[`../genie-agent-versioning-mcp-design.md`](../genie-agent-versioning-mcp-design.md).
 
 ## MCP tools
 
