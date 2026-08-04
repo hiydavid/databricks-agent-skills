@@ -33,7 +33,8 @@ The contract and responsibility boundary are documented in
 Retrieve this object with Get Genie Agent using `include_serialized_space=true` and pass
 the returned `serialized_space` string exactly. A summary, benchmark result, pass rate, or
 other progress metadata is not a restorable snapshot and is rejected. The parsed string
-must contain the exported Genie fields `version`, `config`, and `data_sources`.
+must contain the exported Genie fields `version`, `instructions`, and `data_sources`.
+Legacy exports containing `config` instead of `instructions` remain accepted.
 
 The five outer restore fields must be present even when a nullable value is `null`.
 Additional JSON-safe configuration fields are preserved. The server adds `format_version`

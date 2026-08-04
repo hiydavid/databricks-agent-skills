@@ -118,9 +118,8 @@ def store(backend: InMemoryBackend, settings: Settings) -> AgentVersionStore:
 def complete_config() -> dict:
     return {
         "serialized_space": (
-            '{"version":2,"config":{"sample_questions":[]},'
-            '"data_sources":{"tables":[]},'
-            '"instructions":{"text_instructions":[]}}'
+            '{"version":2,"data_sources":{"tables":[]},'
+            '"instructions":{"text_instructions":[]},"benchmarks":{}}'
         ),
         "title": "Revenue analyst",
         "description": "Answers revenue questions",

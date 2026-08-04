@@ -37,6 +37,17 @@ def test_serialized_space_must_be_json_object(complete_config):
         prepare_envelope(space_id="space-1", config=config, max_config_bytes=1_000_000)
 
 
+def test_current_genie_api_serialized_space_shape_is_accepted(complete_config):
+    serialized_space = json.loads(complete_config["serialized_space"])
+    assert set(serialized_space) == {"version", "data_sources", "instructions", "benchmarks"}
+
+    prepared = prepare_envelope(
+        space_id="space-1", config=complete_config, max_config_bytes=1_000_000
+    )
+
+    assert prepared.envelope["serialized_space"] == complete_config["serialized_space"]
+
+
 @pytest.mark.parametrize(
     "serialized_space",
     [
@@ -51,11 +62,11 @@ def test_summary_or_progress_report_is_not_a_serialized_space(complete_config, s
         prepare_envelope(space_id="space-1", config=config, max_config_bytes=1_000_000)
 
 
-@pytest.mark.parametrize("missing", ["version", "config", "data_sources"])
+@pytest.mark.parametrize("missing", ["version", "data_sources"])
 def test_serialized_space_requires_export_signature(complete_config, missing):
     serialized_space = {
         "version": 2,
-        "config": {},
+        "instructions": {},
         "data_sources": {"tables": []},
     }
     serialized_space.pop(missing)
@@ -69,14 +80,14 @@ def test_serialized_space_requires_export_signature(complete_config, missing):
     [
         ("version", True, "positive integer"),
         ("version", 0, "positive integer"),
-        ("config", [], "must be a JSON object"),
+        ("instructions", [], "must be a JSON object"),
         ("data_sources", [], "must be a JSON object"),
     ],
 )
 def test_serialized_space_export_signature_has_valid_types(complete_config, field, value, message):
     serialized_space = {
         "version": 2,
-        "config": {},
+        "instructions": {},
         "data_sources": {"tables": []},
     }
     serialized_space[field] = value
@@ -89,11 +100,36 @@ def test_serialized_space_export_signature_has_valid_types(complete_config, fiel
 def test_serialized_space_data_source_collections_must_be_arrays(complete_config, collection):
     serialized_space = {
         "version": 2,
-        "config": {},
+        "instructions": {},
         "data_sources": {collection: {}},
     }
     config = {**complete_config, "serialized_space": json.dumps(serialized_space)}
     with pytest.raises(ToolValidationError, match="must be a JSON array"):
+        prepare_envelope(space_id="space-1", config=config, max_config_bytes=1_000_000)
+
+
+def test_serialized_space_accepts_legacy_config_body(complete_config):
+    serialized_space = {
+        "version": 2,
+        "config": {"sample_questions": []},
+        "data_sources": {"tables": []},
+    }
+    config = {**complete_config, "serialized_space": json.dumps(serialized_space)}
+
+    prepared = prepare_envelope(space_id="space-1", config=config, max_config_bytes=1_000_000)
+
+    assert prepared.envelope["serialized_space"] == config["serialized_space"]
+
+
+def test_serialized_space_requires_instructions_or_legacy_config(complete_config):
+    serialized_space = {
+        "version": 2,
+        "data_sources": {"tables": []},
+        "benchmarks": {},
+    }
+    config = {**complete_config, "serialized_space": json.dumps(serialized_space)}
+
+    with pytest.raises(ToolValidationError, match="instructions"):
         prepare_envelope(space_id="space-1", config=config, max_config_bytes=1_000_000)
 
 
@@ -116,11 +152,11 @@ def test_hash_is_canonical_and_excludes_etag(complete_config):
     first = copy.deepcopy(complete_config)
     second = copy.deepcopy(complete_config)
     first["serialized_space"] = (
-        '{"version":2,"config":{"sample_questions":[]},"data_sources":{"tables":[]}}'
+        '{"version":2,"instructions":{"text_instructions":[]},"data_sources":{"tables":[]}}'
     )
     second["serialized_space"] = (
         '{\n  "data_sources": {"tables": []},\n'
-        '  "config": {"sample_questions": []},\n  "version": 2\n}'
+        '  "instructions": {"text_instructions": []},\n  "version": 2\n}'
     )
     second["etag"] = "newer-etag"
 

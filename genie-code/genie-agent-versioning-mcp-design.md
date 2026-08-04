@@ -189,10 +189,11 @@ rather than silently dropped.
 
 Validation rules:
 
-- `serialized_space` must parse as JSON and contain an integer `version`, object `config`,
-  and object `data_sources`. Known data-source collections must be arrays. This rejects
-  status notes and benchmark summaries that are JSON objects but are not restorable Genie
-  exports.
+- `serialized_space` must parse as JSON and contain an integer `version`, object
+  `instructions`, and object `data_sources`. Legacy exports with an object `config` in
+  place of `instructions` remain accepted. Known data-source collections must be arrays.
+  This rejects status notes and benchmark summaries that are JSON objects but are not
+  restorable Genie exports.
 - Unknown envelope fields are preserved when safe.
 - Payload size is bounded to 5 MiB by default and is operator-configurable.
 - `change_summary`, when provided, must be a single line of at most 200 characters.

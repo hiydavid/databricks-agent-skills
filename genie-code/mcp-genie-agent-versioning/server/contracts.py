@@ -19,7 +19,8 @@ MAX_CHANGE_SUMMARY_CHARS = 200
 # These fields are present in the serialized representation returned by the Genie Get
 # Space API. Checking only for an arbitrary JSON object lets callers accidentally persist
 # progress notes or benchmark summaries that cannot be used to restore a space.
-REQUIRED_SERIALIZED_SPACE_FIELDS = ("version", "config", "data_sources")
+REQUIRED_SERIALIZED_SPACE_FIELDS = ("version", "data_sources")
+SERIALIZED_SPACE_BODY_FIELDS = ("instructions", "config")
 
 # Presence is required even when the native value is null. This prevents a caller from
 # accidentally saving a partial API projection and later treating it as rollback-ready.
@@ -118,6 +119,9 @@ def _validate_serialized_space(value: Any) -> dict[str, Any]:
         raise ToolValidationError("`config.serialized_space` JSON must be an object.")
 
     missing = [name for name in REQUIRED_SERIALIZED_SPACE_FIELDS if name not in parsed]
+    body_field = next((name for name in SERIALIZED_SPACE_BODY_FIELDS if name in parsed), None)
+    if body_field is None:
+        missing.append("instructions")
     if missing:
         raise ToolValidationError(
             "`config.serialized_space` is not a complete Genie Agent export; missing "
@@ -127,10 +131,11 @@ def _validate_serialized_space(value: Any) -> dict[str, Any]:
             "`include_serialized_space=true`, not a summary or progress report."
         )
 
+    assert body_field is not None
     version = parsed["version"]
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise ToolValidationError("`config.serialized_space.version` must be a positive integer.")
-    for field in ("config", "data_sources"):
+    for field in (body_field, "data_sources"):
         if not isinstance(parsed[field], dict):
             raise ToolValidationError(f"`config.serialized_space.{field}` must be a JSON object.")
 
