@@ -1,4 +1,4 @@
-"""The public MCP surface is exactly the three v2 tools."""
+"""The public MCP surface exposes snapshot, inspection, and safe restore tools."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ def test_exact_v2_tool_surface(settings):
         "save_agent_config_version",
         "list_agent_versions",
         "get_agent_version",
+        "restore_agent_config_version",
     }
 
 
@@ -40,12 +41,23 @@ def test_save_schema_and_blocking_instruction(settings):
     assert "config" not in save.parameters["properties"]
 
 
-def test_get_description_warns_about_historical_etag(settings):
+def test_get_description_routes_rollback_to_server_side_restore(settings):
     server = FastMCP(name="test")
     register_tools(server, settings)
     get = _registered_tools(server)["get_agent_version"]
-    assert "historical provenance only" in get.description
-    assert "fresh etag" in get.description
+    assert "restore_agent_config_version" in get.description
+    assert "payload stays server-side" in " ".join(get.description.split())
+
+
+def test_restore_schema_and_safety_instruction(settings):
+    server = FastMCP(name="test")
+    register_tools(server, settings)
+    restore = _registered_tools(server)["restore_agent_config_version"]
+    assert restore.parameters["required"] == ["space_id", "version_id"]
+    assert "config" not in restore.parameters["properties"]
+    description = " ".join(restore.description.split())
+    assert "before_rollback" in description
+    assert "optimistic concurrency" in description
 
 
 def test_registered_tools_offload_blocking_work_and_can_overlap(monkeypatch, settings):

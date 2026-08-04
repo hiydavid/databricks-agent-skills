@@ -2,10 +2,12 @@
 
 This Databricks App is a prompt-routed configuration version store for Genie Agents. It
 exposes stateless streamable HTTP at `/mcp`, reads complete live configurations with the
-calling user's identity, and stores them in Unity Catalog. It never updates a live Agent.
+calling user's identity, and stores them in Unity Catalog. Its restore tool can apply only
+a complete snapshot already visible in that user's version history.
 
 Genie Code remains responsible for calling the save tool before an edit, stopping if that
-save fails, and applying edits or rollbacks with native tools.
+save fails, and applying ordinary edits with native tools. Rollback is performed by the
+MCP so the large serialized configuration never passes through model context.
 The contract and responsibility boundary are documented in
 [`../genie-agent-versioning-mcp-design.md`](../genie-agent-versioning-mcp-design.md).
 
@@ -16,6 +18,7 @@ The contract and responsibility boundary are documented in
 | `save_agent_config_version` | Fetch and append the current live configuration. Every successful call creates a new version, including identical content. |
 | `list_agent_versions` | List one Agent's private history with deterministic cursor pagination. |
 | `get_agent_version` | Retrieve one complete version using both `space_id` and `version_id`. |
+| `restore_agent_config_version` | Checkpoint the live Agent and restore one stored version with its current etag. |
 
 `save_agent_config_version` accepts `space_id`, `reason`, and optional lineage/summary
 fields. The MCP calls Get Genie Agent with `include_serialized_space=true` itself, using
@@ -27,16 +30,31 @@ adds `format_version` and `space_id`, bounds the envelope to 5 MiB by default, a
 canonical restore content. Saving requires the caller to have at least CAN EDIT on the
 Agent because that permission is required for `include_serialized_space=true`.
 
-The optional `parent_version_id` records lineage. A `before_rollback` save must include a
-visible, same-Agent `rollback_target_version_id`. The etag returned by
-`get_agent_version` is historical provenance only; use a freshly read live etag to apply a
-rollback.
+The optional `parent_version_id` records lineage. A direct `before_rollback` save must
+include a visible, same-Agent `rollback_target_version_id`; callers normally do not need
+to make that save because `restore_agent_config_version` creates it automatically. The
+etag returned by `get_agent_version` is historical provenance only.
+
+`restore_agent_config_version(space_id, version_id, change_summary?)` loads the target
+from Unity Catalog, fetches the current live configuration and etag through OBO, durably
+saves that state as a `before_rollback` checkpoint, and then PATCHes the stored target
+using the fresh etag. It never accepts a configuration payload. A checkpoint failure
+prevents the PATCH. An etag conflict reports `restore_status: "not_applied"` and retains
+the checkpoint. Other failures after the PATCH begins report `restore_status: "unknown"`
+and return the checkpoint ID so the caller can inspect live state before retrying. This
+ordered flow is conflict-safe but is not a distributed transaction across Genie and SQL.
+
+Both snapshot and restore operations run as the caller. The caller needs the `genie` OAuth
+scope and sufficient Agent permissions for the requested API operation (currently at
+least CAN EDIT for the complete export and update); App CAN MANAGE permission does not
+grant the caller access to a Genie Agent. Version persistence additionally requires the
+`sql` scope and the documented Unity Catalog grants.
 
 ## Architecture and security
 
 - FastAPI + FastMCP on Databricks Apps, served by uvicorn.
 - App identity provisions the schema, table, row filter, and grants.
-- The live Genie read and every version read/write run as the calling user through OBO.
+- The live Genie read/restore and every version read/write run as the caller through OBO.
 - User authorization requires the `genie` and `sql` scopes.
 - A Unity Catalog row filter enforces `created_by = SESSION_USER()`, so histories are
   private per user even when users collaborate on the same Agent.
@@ -226,13 +244,14 @@ long, multi-step tasks:
 
 Add the following text to either instruction file:
 
-> Before changing any Genie Agent configuration, first call
-> `save_agent_config_version` with its `space_id` and reason `before_update` or
-> `before_rollback`; the MCP fetches and stores the complete live configuration directly.
-> Proceed only if the save succeeds. Use
-> `list_agent_versions` and `get_agent_version` for rollback. If the MCP is unavailable
-> or the save fails, stop without editing. For rollback, use a freshly read live etag,
-> never the stored historical etag. Follow this rule even with Auto-Approve enabled.
+> Before making a normal Genie Agent configuration edit, call
+> `save_agent_config_version` with its `space_id` and reason `before_update`; proceed only
+> if the save succeeds. For rollback, call `list_agent_versions`, select a `version_id`,
+> and pass it directly to `restore_agent_config_version`. Do not retrieve or relay the
+> serialized configuration. If restore returns a conflict, inspect the new live state
+> before deciding whether to retry. If it returns `restore_status: "unknown"`, inspect the
+> live Agent before retrying. If the MCP is unavailable or a required save/restore fails,
+> stop without making another edit. Follow this rule even with Auto-Approve enabled.
 
 For extra visibility, task prompts can also include: “Follow the Genie Agent versioning
 instruction before every configuration edit.” Putting the full requirement only in an

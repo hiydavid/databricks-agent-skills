@@ -8,12 +8,15 @@ from typing import Any, cast
 
 import pytest
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import PermissionDenied, ResourceConflict
 
-from server import schema
+from server import schema, tools
 from server.errors import ToolValidationError
+from server.sql import SqlError
 from server.store import _InsertBuilder
 from server.tools import (
     get_agent_version_core,
+    restore_agent_config_version_core,
     save_agent_config_version_core,
     save_live_agent_config_version_core,
 )
@@ -21,60 +24,246 @@ from server.tools import (
 from .conftest import param_value
 
 
+class FakeGenieApiClient:
+    def __init__(self, get_response, *, patch_response=None, patch_error=None, before_patch=None):
+        self.get_response = get_response
+        self.patch_response = patch_response or {}
+        self.patch_error = patch_error
+        self.before_patch = before_patch
+        self.calls = []
+
+    def do(self, method, path, *, query=None, body=None):
+        self.calls.append({"method": method, "path": path, "query": query, "body": body})
+        if method == "GET":
+            return self.get_response
+        if method == "PATCH":
+            if self.before_patch:
+                self.before_patch()
+            if self.patch_error:
+                raise self.patch_error
+            return self.patch_response
+        raise AssertionError(f"unexpected method: {method}")
+
+
+def _workspace_with_api(api_client) -> WorkspaceClient:
+    return cast(WorkspaceClient, SimpleNamespace(api_client=api_client))
+
+
 def test_live_save_fetches_exact_export_server_side(store, backend, complete_config):
-    calls = []
-
-    class GenieAPI:
-        def get_space(self, space_id, *, include_serialized_space):
-            calls.append((space_id, include_serialized_space))
-            return SimpleNamespace(
-                space_id=space_id,
-                title=complete_config["title"],
-                description=complete_config["description"],
-                warehouse_id=complete_config["warehouse_id"],
-                parent_path=complete_config["parent_path"],
-                serialized_space=complete_config["serialized_space"],
-            )
-
-    workspace = cast(WorkspaceClient, SimpleNamespace(genie=GenieAPI()))
+    api = FakeGenieApiClient({**complete_config, "etag": "live-etag"})
 
     result = save_live_agent_config_version_core(
-        workspace,
+        _workspace_with_api(api),
         store,
         space_id="space-1",
         reason="before_update",
     )
 
     assert result["ok"] is True
-    assert calls == [("space-1", True)]
+    assert api.calls == [
+        {
+            "method": "GET",
+            "path": "/api/2.0/genie/spaces/space-1",
+            "query": {"include_serialized_space": True},
+            "body": None,
+        }
+    ]
     row = backend.rows[schema.AGENT_CONFIG_VERSIONS][result["version_id"]]
     envelope = json.loads(row["config_envelope"])
     assert envelope["serialized_space"] == complete_config["serialized_space"]
     assert envelope["title"] == complete_config["title"]
+    assert envelope["etag"] == "live-etag"
 
 
 def test_live_save_rejects_missing_serialized_export_before_write(store, backend):
-    space = SimpleNamespace(
-        title="Revenue analyst",
-        description=None,
-        warehouse_id="warehouse-1",
-        parent_path=None,
-        serialized_space=None,
-    )
-    workspace = cast(
-        WorkspaceClient,
-        SimpleNamespace(genie=SimpleNamespace(get_space=lambda *_args, **_kwargs: space)),
+    api = FakeGenieApiClient(
+        {
+            "title": "Revenue analyst",
+            "description": None,
+            "warehouse_id": "warehouse-1",
+            "parent_path": None,
+            "serialized_space": None,
+            "etag": "live-etag",
+        }
     )
 
     with pytest.raises(ToolValidationError, match="serialized_space"):
         save_live_agent_config_version_core(
-            workspace,
+            _workspace_with_api(api),
             store,
             space_id="space-1",
             reason="before_update",
         )
 
     assert backend.inserts_into(schema.AGENT_CONFIG_VERSIONS) == []
+
+
+def test_restore_checkpoints_current_state_before_etag_guarded_patch(
+    store, backend, complete_config
+):
+    target = save_agent_config_version_core(
+        store,
+        space_id="space-1",
+        config={**complete_config, "title": "Target title", "etag": "historical-etag"},
+        reason="manual",
+    )
+    current = {**complete_config, "title": "Current title", "etag": "live-etag"}
+
+    def assert_checkpoint_exists():
+        assert len(backend.rows[schema.AGENT_CONFIG_VERSIONS]) == 2
+
+    api = FakeGenieApiClient(
+        current,
+        patch_response={"etag": "updated-etag"},
+        before_patch=assert_checkpoint_exists,
+    )
+
+    result = restore_agent_config_version_core(
+        _workspace_with_api(api),
+        store,
+        space_id="space-1",
+        version_id=target["version_id"],
+        change_summary="Restore known-good instructions",
+    )
+
+    assert result == {
+        "ok": True,
+        "space_id": "space-1",
+        "restore_status": "applied",
+        "restored_version_id": target["version_id"],
+        "before_rollback_version_id": result["before_rollback_version_id"],
+        "updated_etag": "updated-etag",
+    }
+    patch = api.calls[1]
+    assert patch["method"] == "PATCH"
+    assert patch["body"] == {
+        "serialized_space": complete_config["serialized_space"],
+        "title": "Target title",
+        "description": complete_config["description"],
+        "warehouse_id": complete_config["warehouse_id"],
+        "parent_path": complete_config["parent_path"],
+        "etag": "live-etag",
+    }
+    checkpoint_row = backend.rows[schema.AGENT_CONFIG_VERSIONS][
+        result["before_rollback_version_id"]
+    ]
+    checkpoint_envelope = json.loads(checkpoint_row["config_envelope"])
+    assert checkpoint_row["reason"] == "before_rollback"
+    assert checkpoint_row["rollback_target_version_id"] == target["version_id"]
+    assert checkpoint_envelope["title"] == "Current title"
+    assert checkpoint_envelope["etag"] == "live-etag"
+
+
+def test_restore_conflict_keeps_checkpoint_without_claiming_success(
+    store, backend, complete_config
+):
+    target = save_agent_config_version_core(
+        store, space_id="space-1", config=complete_config, reason="manual"
+    )
+    api = FakeGenieApiClient(
+        {**complete_config, "etag": "live-etag"},
+        patch_error=ResourceConflict("etag mismatch"),
+    )
+
+    result = restore_agent_config_version_core(
+        _workspace_with_api(api),
+        store,
+        space_id="space-1",
+        version_id=target["version_id"],
+    )
+
+    assert result["ok"] is False
+    assert result["error_type"] == "conflict"
+    assert result["restore_status"] == "not_applied"
+    assert result["rollback_target_version_id"] == target["version_id"]
+    assert result["before_rollback_version_id"] in backend.rows[schema.AGENT_CONFIG_VERSIONS]
+
+
+def test_restore_api_failure_reports_durable_checkpoint_and_unknown_status(
+    monkeypatch, settings, store, backend, complete_config
+):
+    target = save_agent_config_version_core(
+        store, space_id="space-1", config=complete_config, reason="manual"
+    )
+    api = FakeGenieApiClient(
+        {**complete_config, "etag": "live-etag"},
+        patch_error=PermissionDenied("update denied"),
+    )
+    workspace = _workspace_with_api(api)
+    monkeypatch.setattr(tools, "_build_user_context", lambda _settings: (workspace, store))
+
+    result = tools._run_tool(
+        settings,
+        "restore_agent_config_version",
+        lambda active_workspace, active_store: restore_agent_config_version_core(
+            active_workspace,
+            active_store,
+            space_id="space-1",
+            version_id=target["version_id"],
+        ),
+    )
+
+    assert result["ok"] is False
+    assert result["error_type"] == "genie_api_error"
+    assert result["restore_status"] == "unknown"
+    assert result["rollback_target_version_id"] == target["version_id"]
+    assert result["before_rollback_version_id"] in backend.rows[schema.AGENT_CONFIG_VERSIONS]
+    assert "inspect the live Agent before retrying" in result["message"]
+
+
+def test_restore_requires_live_etag_before_checkpoint_or_patch(store, backend, complete_config):
+    target = save_agent_config_version_core(
+        store, space_id="space-1", config=complete_config, reason="manual"
+    )
+    api = FakeGenieApiClient({**complete_config, "etag": None})
+
+    with pytest.raises(ToolValidationError, match="live Agent etag"):
+        restore_agent_config_version_core(
+            _workspace_with_api(api),
+            store,
+            space_id="space-1",
+            version_id=target["version_id"],
+        )
+
+    assert len(backend.rows[schema.AGENT_CONFIG_VERSIONS]) == 1
+    assert all(call["method"] != "PATCH" for call in api.calls)
+
+
+def test_restore_checkpoint_failure_prevents_patch(monkeypatch, store, complete_config):
+    target = save_agent_config_version_core(
+        store, space_id="space-1", config=complete_config, reason="manual"
+    )
+    api = FakeGenieApiClient({**complete_config, "etag": "live-etag"})
+
+    def fail_checkpoint(**_kwargs):
+        raise SqlError("checkpoint failed")
+
+    monkeypatch.setattr(store, "save_agent_config_version", fail_checkpoint)
+
+    with pytest.raises(SqlError, match="checkpoint failed"):
+        restore_agent_config_version_core(
+            _workspace_with_api(api),
+            store,
+            space_id="space-1",
+            version_id=target["version_id"],
+        )
+
+    assert all(call["method"] != "PATCH" for call in api.calls)
+
+
+def test_restore_missing_target_does_not_call_genie_api(store, complete_config):
+    api = FakeGenieApiClient({**complete_config, "etag": "live-etag"})
+
+    result = restore_agent_config_version_core(
+        _workspace_with_api(api),
+        store,
+        space_id="space-1",
+        version_id="missing",
+    )
+
+    assert result["ok"] is False
+    assert result["error_type"] == "not_found"
+    assert api.calls == []
 
 
 def test_save_returns_sql_stamped_metadata(store, backend, complete_config):

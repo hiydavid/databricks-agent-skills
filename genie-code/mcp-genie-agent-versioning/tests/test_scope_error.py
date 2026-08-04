@@ -61,13 +61,13 @@ def test_sql_scope_failure_is_classified(monkeypatch, settings, store):
     assert result["error_type"] == "scope_error"
 
 
-def test_genie_scope_failure_identifies_dashboards_scope(store):
+def test_genie_scope_failure_identifies_genie_scope(store):
     def fail(*_args, **_kwargs):
         raise Unauthenticated("insufficient_scope")
 
     workspace = cast(
         WorkspaceClient,
-        SimpleNamespace(genie=SimpleNamespace(get_space=fail)),
+        SimpleNamespace(api_client=SimpleNamespace(do=fail)),
     )
 
     with pytest.raises(OBOScopeError) as raised:
