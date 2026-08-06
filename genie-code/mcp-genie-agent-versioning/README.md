@@ -18,35 +18,25 @@ MCP so the large serialized configuration never passes through model context.
 | `get_agent_version` | Retrieve one complete version using both `space_id` and `version_id`. |
 | `restore_agent_config_version` | Checkpoint the live Agent and restore one stored version with its current etag. |
 
-`save_agent_config_version` accepts `space_id`, `reason`, and optional lineage/summary
-fields. The MCP calls Get Genie Agent with `include_serialized_space=true` itself, using
-the caller's OBO identity. The large `serialized_space` value never passes through Genie
-Code's model context or tool arguments.
-
-The server preserves `serialized_space`, title, description, warehouse, and parent path,
-adds `format_version` and `space_id`, bounds the envelope to 5 MiB by default, and hashes
-canonical restore content. Saving requires the caller to have at least CAN EDIT on the
-Agent because that permission is required for `include_serialized_space=true`.
+`save_agent_config_version` fetches the live Agent with `include_serialized_space=true`
+through the caller's OBO identity, so `serialized_space` never passes through Genie Code's
+model context or tool arguments. The server adds `format_version` and `space_id`, bounds
+the envelope to 5 MiB by default, and hashes canonical restore content. Saving requires
+at least CAN EDIT on the Agent (that permission is required for `include_serialized_space=true`).
 
 The optional `parent_version_id` records lineage. A direct `before_rollback` save must
 include a visible, same-Agent `rollback_target_version_id`; callers normally do not need
 to make that save because `restore_agent_config_version` creates it automatically. The
-etag returned by `get_agent_version` is historical provenance only.
+etag returned by `get_agent_version` is historical provenance only — read a fresh live etag
+before applying a configuration.
 
-`restore_agent_config_version(space_id, version_id, change_summary?)` loads the target
-from Unity Catalog, fetches the current live configuration and etag through OBO, durably
-saves that state as a `before_rollback` checkpoint, and then PATCHes the stored target
-using the fresh etag. It never accepts a configuration payload. A checkpoint failure
-prevents the PATCH. An etag conflict reports `restore_status: "not_applied"` and retains
-the checkpoint. Other failures after the PATCH begins report `restore_status: "unknown"`
-and return the checkpoint ID so the caller can inspect live state before retrying. This
-ordered flow is conflict-safe but is not a distributed transaction across Genie and SQL.
-
-Both snapshot and restore operations run as the caller. The caller needs the `genie` OAuth
-scope and sufficient Agent permissions for the requested API operation (currently at
-least CAN EDIT for the complete export and update); App CAN MANAGE permission does not
-grant the caller access to a Genie Agent. Version persistence additionally requires the
-`sql` scope and the documented Unity Catalog grants.
+Both snapshot and restore run as the caller, who needs the `genie` scope and sufficient
+Agent permissions (currently at least CAN EDIT for the complete export and update); App
+CAN MANAGE does not grant the caller access to a Genie Agent. Version persistence
+additionally requires the `sql` scope and the documented Unity Catalog grants. See each
+tool's description for its exact save and restore semantics, including the ordered
+checkpoint-then-PATCH flow that makes `restore_agent_config_version` conflict-safe (not a
+distributed transaction across Genie and SQL).
 
 ## Architecture and security
 
@@ -110,15 +100,13 @@ GRANT USE CATALOG ON CATALOG <catalog> TO `<app-service-principal>`;
 GRANT CREATE SCHEMA ON CATALOG <catalog> TO `<app-service-principal>`;
 ```
 
-Next choose the principal that will call the MCP through OBO authorization.
+`USE CATALOG` only permits referencing objects inside the catalog; it does not grant access
+to other schemas or tables. A catalog owner must grant it to whichever principal will call
+the MCP through OBO authorization — a single user's email or an account-level group. Set
+`HISTORY_GRANTEE` to that principal and set `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true` once
+it has effective `USE CATALOG` (directly or through an existing group).
 
 #### Single user
-
-Set `HISTORY_GRANTEE` to your Databricks user email. If you already have effective
-`USE CATALOG` access, directly or through an existing group, no additional user grant is
-needed. Set `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true` to confirm that access.
-
-If you do not already have catalog access, a catalog owner must grant it:
 
 ```sql
 GRANT USE CATALOG ON CATALOG <catalog> TO `<your-email>`;
@@ -127,15 +115,11 @@ GRANT USE CATALOG ON CATALOG <catalog> TO `<your-email>`;
 #### Multiple users
 
 Create or reuse an account-level group, add the MCP users, and set `HISTORY_GRANTEE` to
-that group name. The group must exist before the App starts. If it does not already have
-effective catalog access, a catalog owner must grant it:
+that group name. The group must exist before the App starts.
 
 ```sql
 GRANT USE CATALOG ON CATALOG <catalog> TO `genie_versioning_users`;
 ```
-
-Then set `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true`. `USE CATALOG` is only permission to
-reference objects inside the catalog; it does not grant access to other schemas or tables.
 
 In either case, the App owns the schema it creates and grants the selected
 `HISTORY_GRANTEE` principal `USE SCHEMA` plus `SELECT, MODIFY` only on the row-filtered
@@ -150,8 +134,7 @@ Edit [`app.yaml`](app.yaml):
 - Leave `HISTORY_SCHEMA=genie_agent_versioning` for a fresh deployment.
 - For one user, set `HISTORY_GRANTEE` to that user's email. For multiple users, set it to
   the account-level group from step 3.
-- Set `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true` after confirming that principal has
-  effective `USE CATALOG`, whether directly or through an existing group.
+- Set `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED=true` as confirmed in step 3.
 
 In the App configuration page:
 
@@ -222,25 +205,17 @@ The App exposes the endpoint Genie Code requires at `https://<app-url>/mcp`; use
 the App in the UI rather than entering this URL manually. See the
 [Genie Code MCP documentation](https://docs.databricks.com/aws/en/genie-code/mcp).
 
-Genie Code calls the MCP from the workspace UI, so the browser first sends an
-`OPTIONS /mcp` CORS preflight. The App automatically allows the workspace origin supplied
-by the Databricks Apps runtime in `DATABRICKS_HOST` and workspace aliases on official
-Databricks domains. For a nonstandard domain, add its exact HTTPS origin to
+Genie Code calls the MCP from the workspace UI, which sends an `OPTIONS /mcp` CORS
+preflight. The App automatically allows the `DATABRICKS_HOST` origin and official Databricks
+domain aliases; for a nonstandard domain, add its exact HTTPS origin to
 `DATABRICKS_ORIGIN_ALIASES`.
 
 The MCP exposes versioning tools, but it cannot intercept native Genie Agent edits. Add a
 persistent custom instruction so Genie Code applies the snapshot requirement throughout
-long, multi-step tasks:
-
-- **User instruction:** Best for a personal deployment. In full-page Genie Code, open
-  **Customization** > **Instructions**. Under **User instructions**, select **Add
-  instructions file** and edit the generated
-  `/Users/<your-username-or-email>/.assistant_instructions.md` file.
-- **Workspace instruction:** Best when every Genie Code user must follow the policy. A
-  workspace administrator must add the instruction to
-  `/Workspace/.assistant_workspace_instructions.md`.
-
-Add the following text to either instruction file:
+long, multi-step tasks. Use a **user instruction** (personal deployment: **Customization** >
+**Instructions** > edit `/Users/<your-username-or-email>/.assistant_instructions.md`) or a
+**workspace instruction** (all users: an administrator edits
+`/Workspace/.assistant_workspace_instructions.md`). Add the following to either file:
 
 > Before making a normal Genie Agent configuration edit, call
 > `save_agent_config_version` with its `space_id` and reason `before_update`; proceed only
@@ -251,10 +226,8 @@ Add the following text to either instruction file:
 > live Agent before retrying. If the MCP is unavailable or a required save/restore fails,
 > stop without making another edit. Follow this rule even with Auto-Approve enabled.
 
-For extra visibility, task prompts can also include: “Follow the Genie Agent versioning
-instruction before every configuration edit.” Putting the full requirement only in an
-individual task prompt works for one-off use, but a persistent user or workspace
-instruction is more reliable across long sessions. See the
+A persistent instruction is more reliable than putting the full requirement in individual
+task prompts. See the
 [Genie Code custom instructions documentation](https://docs.databricks.com/aws/en/genie-code/instructions).
 
 ## Configuration
@@ -264,7 +237,7 @@ instruction is more reliable across long sessions. See the
 | `HISTORY_CATALOG` | Pre-existing Unity Catalog catalog; the App never creates it. |
 | `HISTORY_SCHEMA` | Target schema; defaults to `genie_agent_versioning`. |
 | `HISTORY_GRANTEE` | UC principal receiving OBO table access: a user email or account-level group. |
-| `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED` | Confirmation that the principal already has effective `USE CATALOG`, directly or through inheritance. |
+| `HISTORY_GRANTEE_USE_CATALOG_CONFIRMED` | Confirmation that the principal already has effective `USE CATALOG`, directly or through an existing group. |
 | `SQL_WAREHOUSE_ID` | SQL warehouse resource injected from `sql-warehouse`. |
 | `MAX_CONFIG_BYTES` | Maximum UTF-8 envelope size; defaults to 5 MiB. |
 | `TRANSFER_OWNERSHIP` | Opt-in durable group ownership handoff; defaults to `false`. |
