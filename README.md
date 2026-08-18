@@ -83,6 +83,8 @@ For Genie Agent and document parsing workflows, use the official [Databricks Age
 
 Use Genie Code's native skills for these workflows. This repository no longer provides active Genie Code-only skills; the versions under `genie-code/deprecated/` are historical references and should not be installed for new workflows. See the [Databricks Genie Code skills docs](https://docs.databricks.com/aws/en/genie-code/skills) for details.
 
+The **Genie Agent Versioning MCP** (formerly at `genie-code/mcp-genie-agent-versioning/`) has moved to **[genie-code-plugins](https://github.com/hiydavid/genie-code-plugins/tree/main/mcp-genie-agent-versioning)** — a dedicated repo for Genie Code MCP servers and plugins.
+
 ## Development
 
 ### Project structure
