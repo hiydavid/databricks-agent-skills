@@ -1,5 +1,8 @@
 # Agent Skills for Databricks
 
+> [!NOTE]
+> **This repository is no longer actively maintained.** For current Databricks skills, use the official [Databricks Agent Skills](https://github.com/databricks/databricks-agent-skills) repo. The `multi-agent-architecture` skill below is kept as-is without ongoing updates.
+
 Skills that extend Databricks-aware coding agents with Databricks-specific workflows.
 
 This repository contains one active skill, plus two deprecated archives:
